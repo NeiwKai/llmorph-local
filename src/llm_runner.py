@@ -6,7 +6,7 @@ import sys
 
 from config_data import config_data
 
-llm_key_file = config_data.get("llm_key_file")
+#llm_key_file = config_data.get("llm_key_file")
 llm_wait_time = config_data.get("llm_wait_time")
 llm_max_retries = config_data.get("llm_max_retries")
 endpoint = config_data.get("llm_endpoint")
@@ -15,6 +15,7 @@ llm_for_transformation = config_data.get("llm_for_transformation")
 if llm_max_retries is None or llm_max_retries <= 0:
     llm_max_retries = 9999999
 
+'''
 def read_sec_token():
     """
     get the security token stored in a non versioned file needed to access the endpoint
@@ -25,10 +26,11 @@ def read_sec_token():
     mytoken = f.read()
     f.close()
     return (mytoken)
+'''
 
-api_key = read_sec_token()
+#api_key = read_sec_token()
 
-client = OpenAI(api_key = api_key, base_url = endpoint)
+client = OpenAI(api_key = "foot", base_url = endpoint)
 
 def get_llm_function(model):
     def run_llm(messages, max_retries=llm_max_retries):
