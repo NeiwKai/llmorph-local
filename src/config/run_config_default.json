@@ -13,7 +13,7 @@
     "llm_key_file": "security/token-key.jwt",
     "llm_wait_time": 10,
     "llm_max_retries": -1,
-    "llm_endpoint": "https://api.openai.com/v1",
+    "llm_endpoint": "http://localhost:8080/v1",
     "llm_for_transformation": null,
 
     "only_generate_followup_inputs": false,
