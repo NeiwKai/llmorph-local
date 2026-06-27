@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+*.sh
+
+llm
+
+# Ignore example dir
+data/data-example
+
 # C extensions
 *.so
 
