@@ -10,6 +10,9 @@ llm
 # Ignore example dir
 data/data-example
 
+# ignore report pdf from reporter.py
+*.pdf
+
 # C extensions
 *.so
 
