@@ -138,6 +138,25 @@ def create_bar_chart(stats, output):
 
 
 # ---------------------------------------------------------
+# PDF Default Report Name
+# ---------------------------------------------------------
+def default_report_name(json_path):
+    filename = os.path.basename(json_path)
+
+    if filename.startswith("log__"):
+        filename = filename.replace("log__", "report__", 1)
+    else:
+        filename = f"report__{filename}"
+
+    filename = os.path.splitext(filename)[0] + ".pdf"
+
+    report_dir = "report"
+    os.makedirs(report_dir, exist_ok=True)
+
+    return os.path.join(report_dir, filename)
+
+
+# ---------------------------------------------------------
 # PDF Report
 # ---------------------------------------------------------
 def create_pdf(report_name, relation_name, stats, pie_path, bar_path):
@@ -221,11 +240,13 @@ def main():
 
     parser.add_argument(
         "--output",
-        default="MR_Test_Report.pdf",
-        help="Output PDF filename"
+        help="Output PDF filename (optional)"
     )
 
     args = parser.parse_args()
+
+    if args.output is None: # Get default report name
+        args.output = default_report_name(args.json_file)
 
     data = load_json(args.json_file)
 
