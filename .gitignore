@@ -7,8 +7,8 @@ __pycache__/
 
 llm
 
-# Ignore example dir
-data/data-example
+# Ignore data dir
+data
 
 # ignore report pdf from reporter.py
 *.pdf
