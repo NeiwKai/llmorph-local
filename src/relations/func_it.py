@@ -274,7 +274,7 @@ class ITRandomiseWordOrderInSentence(SingleInputRandomBase):
         return self.transform_input(input, self.shuffle_text)
 
 
-# base class for character, word and sentence transformations
+# base class for character, word and sentence transformations, WE CAN CONFIG THIS!
 class ObjectRandomBase(SingleInputRandomBase):
     def __init__(self, transform_indices=[[0]], replace_perc=0.1, rand_seed=42):
         super().__init__(transform_indices, rand_seed)
