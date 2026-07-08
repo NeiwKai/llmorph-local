@@ -19,8 +19,6 @@ data
 
 results_from_server
 
-src/config/
-
 # ignore report pdf from reporter.py
 *.pdf
 
