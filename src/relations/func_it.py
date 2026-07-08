@@ -225,11 +225,11 @@ class ITReplacePeriodWithExclamation(SingleInputTransformer):
         return self.transform_input(input, self.replace_period_with_exclamation)
 
 
-
 class SingleInputRandomBase(SingleInputTransformer):
-    def __init__(self, transform_indices=[[0]], rand_seed=42):
+    def __init__(self, transform_indices=[[0]], rand_seed=42, replace_perc=0.1, **kwargs):
         super().__init__(transform_indices)
         self.rand = random.Random(rand_seed)
+        self.replace_perc = replace_perc
 
 # MR-19
 class ITRandomiseSentenceOrder(SingleInputRandomBase):
@@ -277,8 +277,11 @@ class ITRandomiseWordOrderInSentence(SingleInputRandomBase):
 # base class for character, word and sentence transformations, WE CAN CONFIG THIS!
 class ObjectRandomBase(SingleInputRandomBase):
     def __init__(self, transform_indices=[[0]], replace_perc=0.1, rand_seed=42):
-        super().__init__(transform_indices, rand_seed)
-        self.replace_perc = replace_perc
+        super().__init__(
+            transform_indices=transform_indices,
+            rand_seed=rand_seed,
+            replace_perc=replace_perc, # Change original owner of replace_perc to SingleInputRandomBase
+        )
     
     def transform_function(self, text):
         tokens = self.tokenise(text)
