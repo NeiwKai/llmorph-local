@@ -7,6 +7,10 @@ __pycache__/
 
 llm
 
+*.zip
+
+*.txt
+
 *.csv
 .DS_Store
 
