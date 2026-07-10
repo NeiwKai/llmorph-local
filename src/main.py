@@ -3,7 +3,7 @@ import argparse
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="PROG", prefix_chars="-", 
+    parser = argparse.ArgumentParser(prog="llmorph", prefix_chars="-", 
                                      description="LLMorph: A framework for testing LLMs with metamorphic relations.",
                                      epilog="Paper: https://valerio-terragni.github.io/assets/pdf/cho-icsme-2025.pdf"
                                     )
@@ -17,11 +17,11 @@ def main():
     args = parser.parse_args()
 
     config = {
-        "tasks": {args.task: [args["--mr"]]},
-        "llm_list": [args["--llm"]],
-        "existing_source_inputs": args["--input-data"],
-        "dir_base_default": args["--base-dir"],
-        "replace_perc": args["--replace-perc"],
+        "tasks": {args.task: [args.mr]},
+        "llm_list": [args.llm],
+        "existing_source_inputs": args.input_data,
+        "dir_base_default": args.base_dir,
+        "replace_perc": args.replace_perc,
     }
 
     run_using_config(config)

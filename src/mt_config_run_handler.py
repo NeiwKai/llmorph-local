@@ -1,3 +1,4 @@
+import inspect # for checking that class need that params
 import importlib
 from mt_run import run_test
 from relations.mt_mr_main import Relation
@@ -114,6 +115,11 @@ def instantiate_class(path, *args, **kwargs):
     module_name, class_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     class_ = getattr(module, class_name)
+
+    # Check that class accepting it
+    sig = inspect.signature(class_.__init__)
+    if "replace_perc" not in sig.parameters:
+        kwargs.pop("replace_perc", None)
 
     return class_(*args, **kwargs)
 
