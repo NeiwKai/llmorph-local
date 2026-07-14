@@ -199,6 +199,7 @@ def process_dataset(dataset,
     followup_input_verification_cache = check_and_initialize_cache(dataset, followup_input_verification_cache, "follow-up input verification")
 
     total_length = min(len(dataset), len(source_output_cache), len(followup_input_cache))
+
     for i, (source_input, source_output, followup_input) in tqdm(enumerate(zip(dataset, source_output_cache, followup_input_cache)), total=total_length, desc=f"Running test for ({llm_name}, {task_name}, {relation_name})"):
         if checkpoint and i < checkpoint["next_id"]: # start from checkpoint
             continue
