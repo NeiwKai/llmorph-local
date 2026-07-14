@@ -453,13 +453,25 @@ nlpaug_kwargs = {
     'spelling': {
         'aug_p': 0.1,
     },
+    'random_insert_word': {
+        'model_type': 'word2vec',
+        'model_path': 'GoogleNews-vectors-negative300.bin',
+        'action': 'insert',
+    },
+    'synonym': {
+        'aug_src': 'wordnet',
+    },
     'back_translation': {},
 }
 
 initialised_augmenter_map = {
     'keyboard': nac.KeyboardAug(**nlpaug_kwargs['keyboard']),
     'ocr': nac.OcrAug(**nlpaug_kwargs['ocr']),
+    'antonym': naw.AntonymAug(),
+    #'random_delete_word': naw.RandomWordAug(),
+    'random_insert_word': naw.WordEmbsAug(**nlpaug_kwargs['random_insert_word']),
     'spelling': naw.SpellingAug(**nlpaug_kwargs['spelling']),
+    'synonym': naw.SynonymAug(**nlpaug_kwargs['synonym']),
     'back_translation': naw.BackTranslationAug(**nlpaug_kwargs['back_translation']),
 }
 
@@ -473,12 +485,14 @@ class ITNlpaug(SingleInputTransformer):
             'keyboard': nac.KeyboardAug,
             'ocr': nac.OcrAug,
             # 'random_char': nac.RandomCharAug,
-            # 'antonym': naw.AntonymAug,
+            'antonym': naw.AntonymAug,
             # 'contextual_word_embs': naw.ContextualWordEmbsAug,
             # 'random_word': naw.RandomWordAug,
+            'random_insert_word': naw.WordEmbsAug,
+            # 'random_delete_word': naw.RandomWordAug,
             'spelling': naw.SpellingAug,
             # 'split': nac.SplitAug,
-            # 'synonym': naw.SynonymAug,
+            'synonym': naw.SynonymAug,
             # 'tfidf': naw.TfIdfAug,
             # 'word_embs': naw.WordEmbsAug,
             'back_translation': naw.BackTranslationAug,
