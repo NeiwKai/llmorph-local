@@ -13,7 +13,7 @@ Video demo: https://youtu.be/sHmqdieCfw4
 
 ## Requirements
 
-**Python:** Python 3.10.5
+**Python:** Python 3.11.15
 
 **Dependencies:** Install using
 
@@ -23,6 +23,11 @@ pip install -r requirements.txt
 and
 ```
 nltk.download('punkt')
+
+python -m spacy download en_core_web_trf
+
+from nlpaug.util.file.download import DownloadUtil
+DownloadUtil.download_word2vec(dest_dir='.')
 ```
 
 An OpenAI key is needed in `security/token-key.jwt`.
