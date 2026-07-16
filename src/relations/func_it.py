@@ -9,6 +9,10 @@ import nlpaug.augmenter.char as nac
 import nlpaug.augmenter.word as naw
 import nlpaug.augmenter.sentence as nas
 import re
+# Custom negation feature
+import spacy
+
+nlp = spacy.load("en_core_web_trf")
 
 RANDOM_SENTENCES = load_json("./resources/random_sentences.json")
 RANDOM_WORDS = load_json("./resources/random_words.json")
@@ -803,6 +807,71 @@ class ITRemoveKeywordRESentence(ITRemoveKeywordRE, ITRemoveKeywordSentence):
 
 
 # 152 - NEGATE
+class ITNegateSpacy(SingleInputTransformer, ITBase):
+    def get_negated(self, input: list) -> str | None:
+        output = [self.negate_sentence(i) for i in input]
+        print("BEFORE:", output)
+        return "".join(output)
+
+    def negate_sentence(self, text: str) -> str:
+        doc = nlp(text)
+        tokens = [t.text_with_ws for t in doc]
+
+        for token in doc:
+            # Skip if already negated
+            if any(child.dep_ == "neg" for child in token.children):
+                return text
+            # ---------- CASE 1 ----------
+            # Auxiliary verb (is, are, was, has, have, will, can...)
+            if token.pos_ in ("AUX", "VERB"):
+                # Ignore "do" auxiliaries
+                if token.lemma_ == "do":
+                    continue
+
+                # Only finite auxiliaries
+                if token.dep_ == "aux" or token.tag_ in (
+                    "VBZ",
+                    "VBP",
+                    "VBD",
+                    "MD"
+                ):
+                    # be / have / modal
+                    if token.lemma_ in (
+                        "be",
+                        "have",
+                        "will",
+                        "can",
+                        "could",
+                        "should",
+                        "would",
+                        "may",
+                        "might",
+                        "must",
+                        "shall"
+                    ):
+                        tokens[token.i] = token.text + " not" + token.whitespace_
+                        return "".join(tokens)
+
+            # ---------- CASE 2 ----------
+            # Main verb without auxiliary
+            if token.pos_ == "VERB" and token.dep_ == "ROOT":
+                has_aux = any(c.dep_ == "aux" for c in token.children)
+                if has_aux:
+                    continue
+
+                lemma = token.lemma_
+
+                if token.tag_ == "VBZ":
+                    replacement = f"does not {lemma}"
+                elif token.tag_ == "VBD":
+                    replacement = f"did not {lemma}"
+                else:
+                    replacement = f"do not {lemma}"
+                tokens[token.i] = replacement + token.whitespace_
+
+                return "".join(tokens)
+        return text
+
 class ITNegate(GPTRunner, SingleInputTransformer, ITBase):
     def get_prompt(self):
         prompt_template = "Negate the following text with minimal change:\n\"{INPUT_0}\"\nOnly output the changed text, nothing else."
@@ -819,7 +888,8 @@ class ITNegate(GPTRunner, SingleInputTransformer, ITBase):
     def input_transformation(self, input: list):
         return self.transform_input(input, self.get_negated)
 
-class ITNegateQA(ITNegate):
+class ITNegateQA(ITNegateSpacy):
+    """ # Use LLM
     def get_negated_context(self, input: list):
         prompt_template = "Given this question:\n\"{INPUT_1}\"\n\nNegate the following text with minimal change such that the information relavent to the question is the opposite:\n\"{INPUT_0}\"\nOnly output the changed text, nothing else."
         examples = [
@@ -827,10 +897,11 @@ class ITNegateQA(ITNegate):
             [["She went to the shops, ate a cabbage, and returned home with a basketball.", "What did she eat?"], "She went to the shops, didn't eat a cabbage, and returned home with a basketball."]
         ]
         return self.run_gpt(input, prompt_template, examples)
+    """
     
     def input_transformation(self, input: list):
         # input: [context, question]
-        negated_context = self.get_negated_context(input)
+        negated_context = self.get_negated(input) # self.get_negated_context(input) # Use llm
         negated_question = self.get_negated([input[1]])
         return [[negated_context, input[1]], [input[0], negated_question]]
 
