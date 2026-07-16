@@ -6,6 +6,7 @@ __pycache__/
 *.sh
 
 llm
+test_experiment
 
 *.zip
 
