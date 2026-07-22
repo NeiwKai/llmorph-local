@@ -9,8 +9,51 @@ import nlpaug.augmenter.char as nac
 import nlpaug.augmenter.word as naw
 import nlpaug.augmenter.sentence as nas
 import re
-# Custom negation feature
+# Custom mr feature
 import spacy
+from keybert import KeyBERT
+from datasets import load_dataset
+import json
+from pathlib import Path
+from sentence_transformers import SentenceTransformer
+from sentence_transformers.util import cos_sim
+
+VOCAB_FILE = Path("./src/config/scitldr_keywords.json")
+kw_model = KeyBERT("sentence-transformers/all-MiniLM-L6-v2")
+
+def build_vocab():
+    dataset_corpus = load_dataset("allenai/scitldr", "Abstract")
+    vocab = set()
+
+    for sample in dataset_corpus["train"]:
+        text = " ".join(sample["source"])
+        keywords = kw_model.extract_keywords(
+            text, 
+            keyphrase_ngram_range=(1, 2),
+            stop_words="english",
+            top_n=20,
+            use_mmr=True,
+            diversity=0.7
+        )
+
+        for kw, _ in keywords:
+            vocab.add(kw.lower())
+
+    with VOCAB_FILE.open("w", encoding="utf-8") as f:
+        json.dump(sorted(vocab), f, indent=2)
+
+    return sorted(vocab)
+
+def load_vocab():
+    with VOCAB_FILE.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+if not VOCAB_FILE.exists():
+    print("Building keyword vocabulary...")
+    vocab = build_vocab()
+else:
+    print("Existing vocabulary cached found...")
+    vocab = load_vocab()
 
 nlp = spacy.load("en_core_web_trf")
 
@@ -525,6 +568,17 @@ class ITNlpaug(SingleInputTransformer):
 
 # KEYWORD-BASED MRS
 
+class GETKeywordBase(CleanText, GPTRunner, ITBase):
+    def get_keywords(self, input):
+        keywords = kw_model.extract_keywords(
+            input,
+            keyphrase_ngram_range=(1, 2),
+            stop_words="english"
+        )
+        keywords = [kw for kw, _ in keywords]
+        return keywords
+        
+
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -546,10 +600,10 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
         return [context, keywords]
     
 
-class ReplaceKeyword(GPTKeywordBase):
+class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
     def replace_words(self, text: str, words_from: list[str], words_to: list[str]):
-        # return self.replace_words_manual(text, words_from, words_to)
-        return self.replace_words_gpt(text, words_from, words_to)
+        return self.replace_words_manual(text, words_from, words_to)
+        # return self.replace_words_gpt(text, words_from, words_to)
 
     def replace_words_manual(self, text: str, words_from: list[str], words_to: list[str]):
         for word_from, word_to in zip(words_from, words_to):
@@ -565,6 +619,43 @@ class ReplaceKeyword(GPTKeywordBase):
     def get_replace_examples(self):
         pass
 
+class SimilarityDictionary():
+    def __init__(self, vocab):
+        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.vocab = vocab
+        self.embeddings = self.model.encode(
+            vocab,
+            normalize_embeddings=True
+        )
+    
+    def nearest(self, keyword, min_score=0.75, max_score=0.95):
+        emb = self.model.encode(
+            keyword,
+            normalize_embeddings=True
+        )
+
+        scores = cos_sim(emb, self.embeddings)[0]
+        
+        order = scores.argsort(descending=True)
+
+        for idx in order:
+            idx = idx.item()
+
+            word = self.vocab[idx]
+            score = float(scores[idx])
+
+            # Skip identical word
+            if word.lower() != keyword.lower():
+                continue
+
+            # Skip if similarity is too low or too high
+            if not (min_score <= score <= max_score):
+                continue
+
+            return word
+
+        # No suitable replacement found
+        return keyword
 
 # 137 - CATEGORY
 class ITReplaceKeywordCategory(ReplaceKeyword):
@@ -578,12 +669,16 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
             "My sister will travel to Italy next year to study Irish."],]
 
     def get_word_same_category(self, input):
+        """
         prompt_template = "Give a word or phrase in the same category as \"{INPUT_0}\"."
         examples = [
             [["Sarah"], "John"],
             [["software engineer"], "farmer"],
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
+        """
+        similarity = SimilarityDictionary(vocab)
+        new_word = similarity.nearest(input)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
 
@@ -597,6 +692,7 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
 class ITReplaceKeywordCategoryQA(ITReplaceKeywordCategory):
     def input_transformation(self, input: list):
         keywords_list = self.get_keywords(input[1]) # keywords from question
+        print("Keyword list:", keywords_list)
         category_words = [self.get_word_same_category(keyword) for keyword in keywords_list]
         outputs = [self.replace_words(input_val, keywords_list, category_words) for input_val in input]
         return [outputs]
@@ -731,10 +827,15 @@ class ITReplaceKeywordRandom(SingleInputRandomBase, ReplaceKeyword):
 class ITReplaceKeywordRandomQA(ITReplaceKeywordRandom):
     def input_transformation(self, input: list):
         keywords = self.get_keywords(input[1]) # keywords from question
+        random_words = self.get_random_words(len(keywords))
+        output_c = self.replace_words(input[0], keywords, random_words)
+        output_q = self.replace_words(input[1], keywords, random_words)
+        """
         random_words_c = self.get_random_words(len(keywords))
         random_words_q = self.get_random_words(len(keywords))
         output_c = self.replace_words(input[0], keywords, random_words_c)
         output_q = self.replace_words(input[1], keywords, random_words_q)
+        """
         return [[output_c, input[1]], [input[0], output_q], [output_c, output_q]] # all combinations
 
 class ITReplaceKeywordRandomRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordRandom):
@@ -746,10 +847,10 @@ class ITReplaceKeywordRandomRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordRando
 
 
 # 34 - REMOVE
-class ITRemoveKeyword(SingleInputTransformer, GPTKeywordBase):
+class ITRemoveKeyword(SingleInputTransformer, GETKeywordBase): #GPTKeywordBase):
     def remove_keywords(self, input_val, keywords):
-        # return self.remove_keywords_manual(input_val, keywords)
-        return self.remove_keywords_gpt(input_val, keywords)
+        return self.remove_keywords_manual(input_val, keywords)
+        # return self.remove_keywords_gpt(input_val, keywords)
     
     def remove_keywords_manual(self, input_val, keywords):
         new_text = input_val
@@ -793,7 +894,7 @@ class ITRemoveKeywordQA(ITRemoveKeyword):
         output_q = self.remove_keywords(input[1], keywords)
         return [[output_c, input[1]], [input[0], output_q], [output_c, output_q]] # all combinations
 
-class ITRemoveKeywordQASentence(ITRemoveKeywordQA, ITRemoveKeywordSentence):
+class ITRemoveKeywordQASentence(ITRemoveKeywordQA):#, ITRemoveKeywordSentence):
     pass
 
 class ITRemoveKeywordRE(ReplaceKeywordDifferenceRE, ITRemoveKeyword):
