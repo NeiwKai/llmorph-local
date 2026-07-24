@@ -579,6 +579,7 @@ class GETKeywordBase(CleanText, GPTRunner, ITBase):
         return keywords
         
 
+"""
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -598,6 +599,7 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
         if isinstance(context, list):
             context = '\n'.join(context)
         return [context, keywords]
+"""
     
 
 class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
@@ -610,6 +612,7 @@ class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
             text = re.sub(r'\b' + word_from + r'\b', word_to, text, flags=re.IGNORECASE)
         return text
     
+    """
     def replace_words_gpt(self, text: str, words_from: list[str], words_to: list[str]):
         prompt_template = "Look at this text:\n\"{INPUT_0}\"\nReplace words using the following rules:\n{INPUT_1}\nOnly replace any words that are there. Ignore any rules that are not used. Only output the modified text."
         examples = self.get_replace_examples()
@@ -618,6 +621,7 @@ class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
     
     def get_replace_examples(self):
         pass
+    """
 
 class SimilarityDictionary():
     def __init__(self, vocab):
@@ -858,6 +862,7 @@ class ITRemoveKeyword(SingleInputTransformer, GETKeywordBase): #GPTKeywordBase):
             new_text = re.sub(r'\b' + keyword + r'\b', '', new_text, flags=re.IGNORECASE)
         return new_text
     
+    """
     def get_gpt_prompt(self):
         prompt_template = "Look at this text:\n\"{INPUT_0}\"\nRemove the following words:\n{INPUT_1}\nOnly remove the words. Only output the modified text."
         examples = [
@@ -869,6 +874,7 @@ class ITRemoveKeyword(SingleInputTransformer, GETKeywordBase): #GPTKeywordBase):
     def remove_keywords_gpt(self, input_val, keywords):
         prompt_template, examples = self.get_gpt_prompt()
         return self.run_gpt([input_val, '\n'.join(keywords)], prompt_template, examples)
+    """
 
     def get_and_remove_keywords(self, input):
         keywords = self.get_keywords(input)
@@ -911,7 +917,6 @@ class ITRemoveKeywordRESentence(ITRemoveKeywordRE, ITRemoveKeywordSentence):
 class ITNegateSpacy(SingleInputTransformer, ITBase):
     def get_negated(self, input: list) -> str | None:
         output = [self.negate_sentence(i) for i in input]
-        print("BEFORE:", output)
         return "".join(output)
 
     def negate_sentence(self, text: str) -> str:
@@ -973,6 +978,7 @@ class ITNegateSpacy(SingleInputTransformer, ITBase):
                 return "".join(tokens)
         return text
 
+"""
 class ITNegate(GPTRunner, SingleInputTransformer, ITBase):
     def get_prompt(self):
         prompt_template = "Negate the following text with minimal change:\n\"{INPUT_0}\"\nOnly output the changed text, nothing else."
@@ -988,6 +994,7 @@ class ITNegate(GPTRunner, SingleInputTransformer, ITBase):
     
     def input_transformation(self, input: list):
         return self.transform_input(input, self.get_negated)
+"""
 
 class ITNegateQA(ITNegateSpacy):
     """ # Use LLM
@@ -1002,11 +1009,11 @@ class ITNegateQA(ITNegateSpacy):
     
     def input_transformation(self, input: list):
         # input: [context, question]
-        negated_context = self.get_negated(input) # self.get_negated_context(input) # Use llm
+        negated_context = self.get_negated([input[0]]) # self.get_negated_context(input) # Use llm
         negated_question = self.get_negated([input[1]])
         return [[negated_context, input[1]], [input[0], negated_question]]
 
-class ITNegateRE(ITNegate):
+class ITNegateRE(ITNegateSpacy):#ITNegate):
     def get_negated_re(self, input: list):
         prompt_template = "Negate the following text with minimal change such that the relationship from \"{INPUT_1}\" to \"{INPUT_2}\" is the opposite:\n\"{INPUT_0}\"\nNegate the text so that the relationship from \"{INPUT_1}\" to \"{INPUT_2}\" is the opposite.\nOnly output the changed text, nothing else."
         examples = [
