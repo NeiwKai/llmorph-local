@@ -579,7 +579,7 @@ class GETKeywordBase(CleanText, GPTRunner, ITBase):
         return keywords
         
 
-"""
+'''
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -599,7 +599,7 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
         if isinstance(context, list):
             context = '\n'.join(context)
         return [context, keywords]
-"""
+'''
     
 
 class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
