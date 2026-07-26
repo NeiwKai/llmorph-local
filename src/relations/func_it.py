@@ -672,10 +672,14 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
 
     def get_antonym(self, input):
         # prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give an antonym for \"{INPUT_1}\". If the word has no antonym, simply output the word itself."
-        prompt_template = "You are given a context and a word. Produce an antonym of the word. Make sure the antonym makes sense in the context. If the word has no antonym, simply output the word itself. \n<context>{INPUT_0}</context>\n<word>{INPUT_1}</word>"
+        prompt_template = "Replace eligible words in the following text with antonyms to change its meaning:\\n\"{INPUT_0}\"\\nRules:\\n1. NEVER replace technical terms, proper nouns, model names, or acronyms.\\n2. If a word lacks a clear, logical antonym in context, leave it unchanged. Do not replace words randomly or with generic terms.\\n3. Maintain grammatical correctness and logical structure.\\nOnly output the changed text, nothing else."
         examples = [
             [["She walked to the store to buy an apple.", "buy"], "sell"],
             [["In 1993, I broke my arm while cleaning my electric car.", "electric"], "petrol"],
+            [["Is Scott and Sid based on a true story?"], "Is Scott and Sid based on a false story?"],
+            [["I fell asleep at 6pm."], "I woke up at 6pm."],
+            [["Most existing MCQA datasets are small in size, which increases the difficulty of model learning."], "Most existing MCQA datasets are large in size, which decreases the difficulty of model learning."],
+            [["The proposed MMT framework is independent of backbone language models."], "The proposed MMT framework is dependent on backbone language models."]
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
         cleaned_new_word = self.clean_text(new_word)
