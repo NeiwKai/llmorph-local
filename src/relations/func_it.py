@@ -11,6 +11,8 @@ import nlpaug.augmenter.sentence as nas
 import re
 # Custom negation feature
 import spacy
+import os
+from openai import OpenAI
 
 nlp = spacy.load("en_core_web_trf")
 
@@ -54,6 +56,39 @@ RANDOM_WORDS = load_json("./resources/random_words.json")
 # 152	Negate (output: difference)
 # 154	Capitalise important words
 # 155	Tense change
+
+class ITOpenAIGrammar(SingleInputTransformer):
+    def __init__(self, model_name: str = "gpt-4o-mini", api_key: str = None, transform_indices=[[0]]):
+        super().__init__(transform_indices)
+        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self.model_name = model_name
+
+    def _correct_grammar(self, text: str) -> str:
+        if not text or not text.strip():
+            return text
+
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Correct grammatical errors, spelling, "
+                        "and awkward phrasing in the user's text while preserving its original meaning. "
+                        "Make minimal necessary changes. Return ONLY the corrected text."
+                    )
+                },
+                {"role": "user", "content": text}
+            ],
+            temperature=0.2,
+        )
+        return response.choices[0].message.content.strip()
+
+    def nlp_transform(self, input_val: str) -> str:
+        return self._correct_grammar(input_val)
+
+    def input_transformation(self, input_list: list):
+        return self.transform_input(input_list, self.nlp_transform)
 
 class CleanText():
     def clean_text(self, text):
@@ -622,14 +657,19 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
             "I wonder for what reason garments are so pricy."],]
 
     def get_synonym(self, input):
-        prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give a synonym for \"{INPUT_1}\". If the word has no synonym, simply output the word itself."
+        prompt_template = "You are an expert NLP linguist specializing in precise contextual synonyms.\nTask: Given a context sentence and a target word, output ONLY a valid contextual synonym.\n\nRULES:\n1. PROTECT TERMS & CASE: Do NOT change acronyms (MCQA, MMT, AI), terms, or casing.\n2. PRESERVE HYPHENS: Preserve compound hyphens (e.g., 'multi-source').\n3. SCOPE MATCH: If synonym alters exact technical scope/task (e.g., 'summarization'), output the target word as-is.\n4. NO RANDOM CHANGE: If no precise synonym exists, output target word as-is.\n5. OUTPUT FORMAT: Output ONLY the replacement word—no quotes, explanations, or extra text.\n\nContext:\n\"{INPUT_0}\"\nTarget Word:\n\"{INPUT_1}\""
         examples = [
-            [["Sam walked to the store to buy an apple.", "walked"], "travelled"],
-            [["I wonder why clothes are so expensive.", "expensive"], "pricey"],
+            [["Extensive experiments demonstrate continuous improvements across models.", "experiments"], "tests"],
+            [["I wonder why clothes are so expensive in this store.", "expensive"], "pricey"],
+            [["The system performs summarization and reasoning tasks.", "summarization"], "summarization"],
+            [["To address this, we propose meta transfer for low-resource QA.", "meta transfer"], "meta transfer"],
+            [["Most existing datasets are small in size.", "datasets"], "datasets"],
+            [["We evaluate on multi-source settings.", "multi-source"], "multi-source"]
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
-        cleaned_new_word = self.clean_text(new_word)
-        return cleaned_new_word
+        #cleaned_new_word = self.clean_text(new_word)
+        #return cleaned_new_word
+        return new_word
     
     def replace_synonym(self, input):
         keywords = self.get_keywords(input)
@@ -672,14 +712,13 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
 
     def get_antonym(self, input):
         # prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give an antonym for \"{INPUT_1}\". If the word has no antonym, simply output the word itself."
-        prompt_template = "Replace eligible words in the following text with antonyms to change its meaning:\\n\"{INPUT_0}\"\\nRules:\\n1. NEVER replace technical terms, proper nouns, model names, or acronyms.\\n2. If a word lacks a clear, logical antonym in context, leave it unchanged. Do not replace words randomly or with generic terms.\\n3. Maintain grammatical correctness and logical structure.\\nOnly output the changed text, nothing else."
+        prompt_template = "Replace eligible words in the following text with antonyms to change its meaning:\\n\"{INPUT_0}\"\\nRules:\\n1. NEVER replace technical terms, proper nouns, model names, or acronyms.\\n2. If a word lacks a clear, logical antonym in context, leave it unchanged. Do not replace words randomly or with generic terms.\\n3. Maintain grammatical correctness and logical structure.\\nOnly output the changed text, nothing else." 
         examples = [
-            [["She walked to the store to buy an apple.", "buy"], "sell"],
-            [["In 1993, I broke my arm while cleaning my electric car.", "electric"], "petrol"],
             [["Is Scott and Sid based on a true story?"], "Is Scott and Sid based on a false story?"],
-            [["I fell asleep at 6pm."], "I woke up at 6pm."],
-            [["Most existing MCQA datasets are small in size, which increases the difficulty of model learning."], "Most existing MCQA datasets are large in size, which decreases the difficulty of model learning."],
-            [["The proposed MMT framework is independent of backbone language models."], "The proposed MMT framework is dependent on backbone language models."]
+            [["Most existing MCQA datasets are small in size, which increases the difficulty of model learning."], "Most existing MCQA datasets are large in size, which increases the difficulty of model learning."
+      ],
+        [["The proposed MMT framework is independent of backbone language models."], "The proposed MMT framework is dependent on backbone language models."],
+            [["Continuous improvements can be achieved on different backbone networks."], "Continuous declines can be achieved on different backbone networks."]
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
         cleaned_new_word = self.clean_text(new_word)
