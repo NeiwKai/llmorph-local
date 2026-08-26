@@ -1,19 +1,19 @@
 {
     "tasks": {
-        "question_answering": ["1", "2"]
+        "question_answering": ["10"]
     },
     "llm_list": [
       "gemma-3-4b-it-q4_k_m"
     ],
+    "llm_endpoint": "http://localhost:8080/v1",
+    "llm_for_transformation": "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K",
 
     "checkpoint_interval": 50,
     "continue_from_checkpoint": true,
 
     "llm_key_file": "security/token-key.jwt",
 
-    "llm_gguf_file": "llm/gemma-3-4b-it-q4_k_m.gguf",
+    "existing_source_inputs": "data/acl-sample-dataset/source_inputs/acl_sample_source_inputs.json",
 
-    "existing_source_inputs": "data/data-example/source_inputs/source_inputs.json",
-
-    "dir_base_default": "data/data-example"
+    "dir_base_default": "data/acl-sample-dataset"
 }
