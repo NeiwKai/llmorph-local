@@ -60,6 +60,33 @@ nlp = spacy.load("en_core_web_trf")
 RANDOM_SENTENCES = load_json("./resources/random_sentences.json")
 RANDOM_WORDS = load_json("./resources/random_words.json")
 
+def CustomAugTokenizer(text) -> str:
+    return [t.text for t in nlp(text)]
+
+def CustomAugReverseTokenizer(tokens) -> str:
+    text = ""
+    for token in tokens:
+        if token in ".,!?;:":
+            text += token
+        elif token in "('[":
+            text += token
+        else:
+            if text:
+                text += " "
+            text += token
+
+    return text
+
+
+class SmartAntonymAug(naw.AntonymAug) -> list:
+    def skip_aug(self, token_idxes, tokens):
+        ALLOWED = {"JJ", "JJR", "JJS", "RB", "RBR", "RBS"}
+        return [
+            idx
+            for idx in token_idxes
+            if tokens[idx][1] in ALLOWED
+        ]
+
 # MR list
 # 1	Replace characters with random
 # 2	Delete characters
@@ -99,13 +126,21 @@ RANDOM_WORDS = load_json("./resources/random_words.json")
 # 155	Tense change
 
 class CleanText():
-    def clean_text(self, text):
+    """
+    Clean a given text to eliminate punctuation and lowering the letter.
+    """
+
+    def clean_text(self, text: str) -> str:
         lowercased = text.lower()
         no_punctuation = ''.join(char for char in lowercased if char not in string.punctuation)
         cleaned = ' '.join(no_punctuation.split())
         return cleaned
 
 class ITBase(FuncIT):
+    """
+    Handling the main transformation with given text.
+    """
+
     def __init__(self, transform_indices=[[0]], multi_input=False):
         self.transform_indices = transform_indices
         self.multi_input = multi_input
@@ -114,7 +149,7 @@ class ITBase(FuncIT):
         transform_target = input if self.multi_input else input[n]
         return transformation(transform_target)
 
-    def transform_input(self, input: list, transformation):
+    def transform_input(self, input: list, transformation) -> str:
         unique_indices = set(index for sublist in self.transform_indices for index in sublist)
 
         # get transformed values for each of any specified index
@@ -133,80 +168,126 @@ class ITBase(FuncIT):
         return output_values
 
 class SingleInputTransformer(ITBase):
-    def __init__(self, transform_indices=[[0]]):
-        super().__init__(transform_indices, False)
+    """
+    Transform single input.
+
+    :param list(list) transform_indices: indices of transformation.
+    """
+
+    def __init__(self, transform_indices=[[0]], **kwargs):
+        super().__init__(**kwargs)#transform_indices, False, **kwargs) # consume only what it use
 
 # MR-49
 class ITNone(FuncIT):
+    """
+    No transformation.
+    """
+
     def __init__(self, *args, **kwargs):
         pass
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> list:
         return [input]
 
-class GPTRunner():
+class GPTRunner() -> str | None:
+    """
+    Run the llm with given prompt template.
+    """
+
     def run_gpt(self, input, prompt_template, examples=[]):
         if not isinstance(input, list):
             input = [input]
         return run_template_gpt(input, prompt_template, examples)
 
 class ITGPT(ITBase):
+    """
+    Run llm and transform the given input.
+
+    :param str prompt_template: The template of a prompt.
+    :param list examples: The few shot prompting examples.
+    :param list(list) transform_indices: Indices of transformation.
+    :param bool multi_input: Flag for multiple input.
+    """
+    
     def __init__(self, prompt_template: str, examples=[], transform_indices=[[0]], multi_input=False):
         super().__init__(transform_indices, multi_input)
         self.prompt_template = prompt_template
         self.examples = examples
 
-    def run_gpt(self, input):
+    def run_gpt(self, input) -> str | None:
         if not isinstance(input, list):
             input = [input]
         return run_template_gpt(input, self.prompt_template, self.examples)
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.run_gpt)
 
 class ITGPTSentence(ITGPT):
-    def sentence_transform(self, input: list):
+    """
+    Transform the given input.
+    """
+
+    def sentence_transform(self, input: list) -> str:
         input_sentences = sent_tokenize(input)
         output = [self.run_gpt(sentence) for sentence in input_sentences]
         return ' '.join(output)
     
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.sentence_transform)
 
 class ITGPTConcatInf(ITGPT):
-    def input_transformation(self, input: list):
+    """
+    Concatenate the whole input.
+    """
+
+    def input_transformation(self, input: list) -> list:
         output = input.copy()
         transform_target = output if self.multi_input else output[self.transform_indices]
         output[self.transform_indices[0][0]] = output[self.transform_indices[0][0]] + " " + self.run_gpt(transform_target) # hardcoded...
         return [output]
 
 class ITConcat(SingleInputTransformer):
+    """
+    Concatenate the single input.
+
+    :param str addition: The text that will be concat with.
+    :param list(list): The indices of transformation.
+    """
+
     def __init__(self, addition: str, transform_indices=[[0]]):
         super().__init__(transform_indices)
         self.addition = addition
 
-    def concat(self, input_val):
+    def concat(self, input_val) -> str:
         return input_val + " " + self.addition
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.concat)
 
 # MR-84
 class ITConcatRandomSentence(SingleInputTransformer):
+    """
+    Concatenate with random sentence.
+
+    :param list(list) transform_indices: The indices of transformation.
+    :param int rand_seed: Random seed for random engine.
+    """
+
     def __init__(self, transform_indices=[[0]], rand_seed=42):
         super().__init__(transform_indices)
         self.data = RANDOM_SENTENCES
         self.rand = random.Random(rand_seed)
 
-    def concat_random(self, input_val):
+    def concat_random(self, input_val) -> str:
         random_datum = self.rand.choice(self.data)
         return input_val + " " + random_datum
     
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.concat_random)
 
 
 # not used
+"""
 class ITSentiment(CleanText, SingleInputTransformer):
     def get_sentiment(self, inputs): # temporary
         prompt_template = "You are a sentiment analysis tool. Given a sentence, say if it is 'positive' or 'negative' or 'neutral', nothing else.\nWhat is the sentiment of the following sentence?\n\"{INPUT_0}\"\nOnly write a one-word answer."
@@ -240,13 +321,19 @@ class ITGPTBackTranslate(SingleInputTransformer):
 
     def input_transformation(self, input: list):
         return self.transform_input(input, self.back_translate)
+"""
 
 class ITPermuteInputs(FuncIT):
-    # a permutation list of which element to map to where, e.g. [2,0,1]
+    """
+    A permutation list of which element to map to where, e.g. [2,0,1]
+
+    :param list permute_to: The target mapped list.
+    """
+
     def __init__(self, permute_to: list):
         self.permute_to = permute_to
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> list:
         output = [''] * len(input)
         for val, n in zip(input, self.permute_to):
             output[n] = val
@@ -254,25 +341,41 @@ class ITPermuteInputs(FuncIT):
 
 # MR-102
 class ITCapitalisation(SingleInputTransformer):
-    def capitalise(self, input_val):
+    """
+    Captilize the single input.
+    """
+
+    def capitalise(self, input_val) -> str:
         return input_val.upper()
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.capitalise)
 
 # MR-150
 class ITReplacePeriodWithExclamation(SingleInputTransformer):
-    def replace_period_with_exclamation(self, input_val):
+    """
+    Replace period('.') with exclamation mark('!').
+    """
+
+    def replace_period_with_exclamation(self, input_val) -> str:
         new_val = input_val.replace('.', '!')
         if not new_val.endswith('!'):
             new_val += '!'
         return new_val
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.replace_period_with_exclamation)
 
 
 class SingleInputRandomBase(SingleInputTransformer):
+    """
+    The core single randomization engine.
+
+    :param list(list) transform_indices: The indices of transformation.
+    :param int rand_seed: Random seed for random engine.
+    :param float replace_perc: The ratio of transformation with original input. For example, 0.1 -> replace 10% of given input.
+    """
+
     def __init__(self, transform_indices=[[0]], rand_seed=42, replace_perc=0.1, **kwargs):
         super().__init__(transform_indices)
         self.rand = random.Random(rand_seed)
@@ -280,15 +383,20 @@ class SingleInputRandomBase(SingleInputTransformer):
 
 # MR-19
 class ITRandomiseSentenceOrder(SingleInputRandomBase):
-    def randomise_sentences(self, input_val):
+    """
+    Randomize the order sentences. For example, <I don't need it> -> <it I need don't>
+    """
+
+    def randomise_sentences(self, input_val) -> str:
         sentences = sent_tokenize(input_val)
         self.rand.shuffle(sentences)
         return ' '.join(sentences)
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.randomise_sentences)
 
 # not used
+"""
 class ITRandomiseWordOrder(SingleInputRandomBase):
     def randomise_words(self, input_val):
         words = word_tokenize(input_val)
@@ -319,10 +427,18 @@ class ITRandomiseWordOrderInSentence(SingleInputRandomBase):
 
     def input_transformation(self, input: list):
         return self.transform_input(input, self.shuffle_text)
+"""
 
 
-# base class for character, word and sentence transformations, WE CAN CONFIG THIS!
 class ObjectRandomBase(SingleInputRandomBase):
+    """
+    Base class for character, word and sentence transformations. <CONFIGABLE>
+
+    :param list(list) transform_indices: Indices of transformation.
+    :param float replace_perc: The ratio of transformation on given input. For example, 0.1 -> replace 10% of input.
+    :param float rand_seed: Random seed for random engine.
+    """
+
     def __init__(self, transform_indices=[[0]], replace_perc=0.1, rand_seed=42):
         super().__init__(
             transform_indices=transform_indices,
@@ -330,7 +446,7 @@ class ObjectRandomBase(SingleInputRandomBase):
             replace_perc=replace_perc, # Change original owner of replace_perc to SingleInputRandomBase
         )
     
-    def transform_function(self, text):
+    def transform_function(self, text) -> str:
         tokens = self.tokenise(text)
         num_mutated = math.ceil((len(tokens) - 1) * self.replace_perc) # don't do all
         ids = self.rand.sample(range(len(tokens)), num_mutated)
@@ -346,18 +462,22 @@ class ObjectRandomBase(SingleInputRandomBase):
     def object_transform(self, ids: list, text):
         pass
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.transform_function)
 
 
 class CharacterRandomBase(ObjectRandomBase):
-    def tokenise(self, text):
+    """
+    Character-level random engine.
+    """
+
+    def tokenise(self, text) -> list:
         return list(text)
     
-    def join_tokens(self, tokens):
+    def join_tokens(self, tokens) -> str:
         return ''.join(tokens)
     
-    def transform_function(self, text):
+    def transform_function(self, text) -> str:
         # only modifies tokens that are letters
         tokens = self.tokenise(text)
         letter_ids = [i for i, token in enumerate(tokens) if token.isalpha()]
@@ -370,28 +490,44 @@ class CharacterRandomBase(ObjectRandomBase):
 
 # MR-1
 class ITReplaceCharacters(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random replacement.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             text[i] = chr(self.rand.randint(97, 122))
         return text
 
 # MR-2
 class ITDeleteCharacters(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random deletion.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             text[i] = ''
         return text
 
 # MR-4
 class ITAddCharacters(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random addition.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             text[i] = text[i] + chr(self.rand.randint(97, 122))
         return text
 
 # MR-3
 class ITLeetFormat(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random replace letter with number.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         leet_dict = {'a': '4', 'e': '3', 'i': '1', 'o': '0', 't': '7'}
         for i in ids:
             text[i] = leet_dict.get(text[i], text[i])
@@ -399,35 +535,55 @@ class ITLeetFormat(CharacterRandomBase):
 
 # MR-5
 class ITAddSpaces(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random whitespace injection.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             text[i] = text[i] + ' '
         return text
 
 # MR-6
 class ITSwapCharacters(CharacterRandomBase):
-    def object_transform(self, ids: list, text: list):
+    """
+    Character-level random swap position.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             if i < len(text) - 1:
                 text[i], text[i + 1] = text[i + 1], text[i]
         return text
 
 class WordRandomBase(ObjectRandomBase):
-    def tokenise(self, text):
+    """
+    Word-level random engine.
+    """
+
+    def tokenise(self, text) -> list:
         return word_tokenize(text)
     
-    def join_tokens(self, tokens):
+    def join_tokens(self, tokens) -> str:
         return ' '.join(tokens)
 
 class ITRandomiseCharacterOrderInWord(WordRandomBase):
-    def object_transform(self, ids: list, text):
+    """
+    Word-level random character within word.
+    """
+
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             text[i] = ''.join(self.rand.sample(text[i], len(text[i])))
         return text
 
 # MR-7
 class ITRandomiseCharacterOrderInWordKeepingEnds(WordRandomBase):
-    def transform_function(self, text):
+    """
+    Word-level random character within word except the ending.
+    """
+
+    def transform_function(self, text) -> str:
         tokens = self.tokenise(text)
         ids_at_least_4 = [i for i, token in enumerate(tokens) if len(token) >= 4]
         num_mutated = math.ceil(len(ids_at_least_4) * self.replace_perc)
@@ -435,7 +591,7 @@ class ITRandomiseCharacterOrderInWordKeepingEnds(WordRandomBase):
         new_text = self.object_transform(ids, tokens)
         return self.join_tokens(new_text)
     
-    def object_transform(self, ids: list, text):
+    def object_transform(self, ids: list, text: list) -> list:
         for i in ids:
             if len(text[i]) > 3:
                 for _ in range(10): # tries to get different word 10 times
@@ -447,10 +603,14 @@ class ITRandomiseCharacterOrderInWordKeepingEnds(WordRandomBase):
 
 # MR-9
 class ITAddRandomWordAfter(WordRandomBase):
-    def get_random_word(self):
+    """
+    Word-level random addition word after original one.
+    """
+
+    def get_random_word(self) -> str:
         return self.rand.choice(RANDOM_WORDS)
     
-    def object_transform(self, ids: list, text):
+    def object_transform(self, ids: list, text: list) -> list:
         out_list = []
         for i, t in enumerate(text):
             out_list.append(t)
@@ -461,12 +621,17 @@ class ITAddRandomWordAfter(WordRandomBase):
 
 
 class SentenceRandomBase(ObjectRandomBase):
-    def tokenise(self, text):
+    """
+    Sentence-level random engine.
+    """
+
+    def tokenise(self, text) -> list:
         return sent_tokenize(text)
     
-    def join_tokens(self, tokens):
+    def join_tokens(self, tokens) -> str:
         return ' '.join(tokens)
 
+"""
 # not used
 class ITDeleteSentences(SentenceRandomBase):
     def object_transform(self, ids: list, text: list):
@@ -483,6 +648,7 @@ class ITReplaceSentences(SentenceRandomBase):
         for i in ids:
             text[i] = dummy_sentence
         return text
+"""
 
 
 # NLPAUG
@@ -497,6 +663,12 @@ nlpaug_kwargs = {
         'aug_char_p': 0.1,
         'aug_word_p': 0.1,
     },
+    'antonym': {
+        'lang': 'eng',
+        'stopwords': ['is', 'am', 'are', 'be'],
+        'tokenizer': CustomAugTokenizer,
+        'reverse_tokenizer': CustomAugReverseTokenizer,
+    },
     'spelling': {
         'aug_p': 0.1,
     },
@@ -507,6 +679,8 @@ nlpaug_kwargs = {
     },
     'synonym': {
         'aug_src': 'wordnet',
+        'lang': 'eng',
+        'stopwords': ['is', 'am', 'are', 'be'],
     },
     'back_translation': {},
 }
@@ -514,7 +688,7 @@ nlpaug_kwargs = {
 initialised_augmenter_map = {
     'keyboard': nac.KeyboardAug(**nlpaug_kwargs['keyboard']),
     'ocr': nac.OcrAug(**nlpaug_kwargs['ocr']),
-    'antonym': naw.AntonymAug(),
+    'antonym': SmartAntonymAug(**nlpaug_kwargs['antonym']),
     #'random_delete_word': naw.RandomWordAug(),
     'random_insert_word': naw.WordEmbsAug(**nlpaug_kwargs['random_insert_word']),
     'spelling': naw.SpellingAug(**nlpaug_kwargs['spelling']),
@@ -523,16 +697,23 @@ initialised_augmenter_map = {
 }
 
 class ITNlpaug(SingleInputTransformer):
+    """
+    The core engine for nlpaug with single input transformation.
+
+    :param str augment_type: Flag for the type of augmentation.
+    :param list(list) transform_indices: Indices of transformation.
+    """
+
     def __init__(self, augment_type: str, transform_indices=[[0]], **augmenter_kwargs):
         super().__init__(transform_indices)
         self.augmenter = self._initialize_augmenter(augment_type, **augmenter_kwargs)
 
-    def _initialize_augmenter(self, augmenter_type, **kwargs):
+    def _initialize_augmenter(self, augmenter_type, **kwargs) -> dict:
         augmenter_map = {
             'keyboard': nac.KeyboardAug,
             'ocr': nac.OcrAug,
             # 'random_char': nac.RandomCharAug,
-            'antonym': naw.AntonymAug,
+            'antonym': SmartAntonymAug,
             # 'contextual_word_embs': naw.ContextualWordEmbsAug,
             # 'random_word': naw.RandomWordAug,
             'random_insert_word': naw.WordEmbsAug,
@@ -555,7 +736,7 @@ class ITNlpaug(SingleInputTransformer):
         # return augmenter_map[augmenter_type](**kwargs)
         return initialised_augmenter_map[augmenter_type]
 
-    def nlp_transform(self, input_val):
+    def nlp_transform(self, input_val) -> str:
         augmented_text = self.augmenter.augment(input_val)
         return augmented_text if isinstance(augmented_text, str) else augmented_text[0]
     
@@ -569,10 +750,21 @@ class ITNlpaug(SingleInputTransformer):
 # KEYWORD-BASED MRS
 
 class GETKeywordBase(CleanText, GPTRunner, ITBase):
-    def get_keywords(self, input):
+    """
+    A keyword selection system featuring KeyBERT
+
+    :param tuple(int,int) keyphrase_ngram_range: the range of ngram that will be use in KeyBERT.
+    """
+
+    def __init__(self, keyphrase_ngram_range, **kwargs):
+        super().__init__(**kwargs) # consume only what it use
+        self.keyphrase_ngram_range = keyphrase_ngram_range
+
+    def get_keywords(self, input) -> str:
+        print("Using keyphrase_ngram_range:", self.keyphrase_ngram_range)
         keywords = kw_model.extract_keywords(
             input,
-            keyphrase_ngram_range=(1, 2),
+            keyphrase_ngram_range=tuple(self.keyphrase_ngram_range),
             stop_words="english"
         )
         keywords = [kw for kw, _ in keywords]
@@ -580,6 +772,7 @@ class GETKeywordBase(CleanText, GPTRunner, ITBase):
         
 
 '''
+# Replaced by GETKeywordBase(...)
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -603,16 +796,21 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     
 
 class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
-    def replace_words(self, text: str, words_from: list[str], words_to: list[str]):
+    """
+    Keyword replace engine
+    """
+
+    def replace_words(self, text: str, words_from: list[str], words_to: list[str]) -> str:
         return self.replace_words_manual(text, words_from, words_to)
         # return self.replace_words_gpt(text, words_from, words_to)
 
-    def replace_words_manual(self, text: str, words_from: list[str], words_to: list[str]):
+    def replace_words_manual(self, text: str, words_from: list[str], words_to: list[str]) -> str:
         for word_from, word_to in zip(words_from, words_to):
             text = re.sub(r'\b' + word_from + r'\b', word_to, text, flags=re.IGNORECASE)
         return text
     
     """
+    # Use manual instead!
     def replace_words_gpt(self, text: str, words_from: list[str], words_to: list[str]):
         prompt_template = "Look at this text:\n\"{INPUT_0}\"\nReplace words using the following rules:\n{INPUT_1}\nOnly replace any words that are there. Ignore any rules that are not used. Only output the modified text."
         examples = self.get_replace_examples()
@@ -624,6 +822,12 @@ class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
     """
 
 class SimilarityDictionary():
+    """
+    Dictionary of similar word <In progress>.
+
+    :param set vocab: A set of vocabulary.
+    """
+
     def __init__(self, vocab):
         self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         self.vocab = vocab
@@ -632,7 +836,7 @@ class SimilarityDictionary():
             normalize_embeddings=True
         )
     
-    def nearest(self, keyword, min_score=0.75, max_score=0.95):
+    def nearest(self, keyword, min_score=0.75, max_score=0.95) -> str:
         emb = self.model.encode(
             keyword,
             normalize_embeddings=True
@@ -663,7 +867,12 @@ class SimilarityDictionary():
 
 # 137 - CATEGORY
 class ITReplaceKeywordCategory(ReplaceKeyword):
-    def get_replace_examples(self):
+    """
+    Keyword replace with same category. For example, <I like train> -> <I like car>.
+    """
+
+    """
+    def get_replace_examples(self) -> list:
         return [[[
             "Sarah is an American software engineer. She works for Microsoft.", 
             "software engineer -> farmer\nSarah -> John\nAmerican -> Swedish\napple -> pear\nMicrosoft -> Nvidea"], 
@@ -671,8 +880,9 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
             [["My brother will travel to Japan next month to study Japanese.", 
             "sweater -> shirt\nJapanese -> Irish\nmonth -> year\nEurope -> Asia\nbrother -> sister\nJapan -> Italy"], 
             "My sister will travel to Italy next year to study Irish."],]
+    """
 
-    def get_word_same_category(self, input):
+    def get_word_same_category(self, input) -> str:
         """
         prompt_template = "Give a word or phrase in the same category as \"{INPUT_0}\"."
         examples = [
