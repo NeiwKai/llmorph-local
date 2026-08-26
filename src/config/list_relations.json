@@ -138,7 +138,7 @@
             "func_vso": {"class": "relations.func_verify.VerifySetDifference", "args": ["unknown"]}
         },
         "34": {
-            "func_it": {"class": "relations.func_it.ITRemoveKeywordQASentence"},
+            "func_it": {"class": "relations.func_it.ITRemoveKeywordQASentence", "kwargs": {"keyphrase_ngram_range": [1, 2]}},
             "func_vso": {"class": "relations.func_verify.VerifySetDifference", "args": ["unknown"]}
         },
         "25": {
