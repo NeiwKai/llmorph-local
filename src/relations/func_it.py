@@ -93,6 +93,15 @@ class SmartAntonymAug(naw.AntonymAug):
             if tokens[idx][1] in ALLOWED
         ]
 
+class SmartSynonymAug(naw.SynonymAug):
+    def skip_aug(self, token_idxes, tokens) -> list:
+        ALLOWED = {"JJ", "JJR", "JJS", "RB", "RBR", "RBS"}
+        return [
+            idx
+            for idx in token_idxes
+            if tokens[idx][1] in ALLOWED
+        ]
+
 # MR list
 # 1	Replace characters with random
 # 2	Delete characters
@@ -597,6 +606,8 @@ nlpaug_kwargs = {
         'aug_src': 'wordnet',
         'lang': 'eng',
         'stopwords': ['is', 'am', 'are', 'be', 'do', 'does'],
+        'tokenizer': CustomAugTokenizer,
+        'reverse_tokenizer': CustomAugReverseTokenizer,
     },
     'back_translation': {},
 }
@@ -608,7 +619,7 @@ initialised_augmenter_map = {
     #'random_delete_word': naw.RandomWordAug(),
     'random_insert_word': naw.WordEmbsAug(**nlpaug_kwargs['random_insert_word']),
     'spelling': naw.SpellingAug(**nlpaug_kwargs['spelling']),
-    #'synonym': naw.SynonymAug(**nlpaug_kwargs['synonym']),
+    'synonym': SmartSynonymAug(**nlpaug_kwargs['synonym']),
     'back_translation': naw.BackTranslationAug(**nlpaug_kwargs['back_translation']),
 }
 
@@ -636,7 +647,7 @@ class ITNlpaug(SingleInputTransformer):
             # 'random_delete_word': naw.RandomWordAug,
             'spelling': naw.SpellingAug,
             # 'split': nac.SplitAug,
-            #'synonym': naw.SynonymAug,
+            'synonym': naw.SynonymAug,
             # 'tfidf': naw.TfIdfAug,
             # 'word_embs': naw.WordEmbsAug,
             'back_translation': naw.BackTranslationAug,
