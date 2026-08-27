@@ -78,8 +78,8 @@ def CustomAugReverseTokenizer(tokens) -> str:
     return text
 
 
-class SmartAntonymAug(naw.AntonymAug) -> list:
-    def skip_aug(self, token_idxes, tokens):
+class SmartAntonymAug(naw.AntonymAug):
+    def skip_aug(self, token_idxes, tokens) -> list:
         ALLOWED = {"JJ", "JJR", "JJS", "RB", "RBR", "RBS"}
         return [
             idx
@@ -189,12 +189,12 @@ class ITNone(FuncIT):
     def input_transformation(self, input: list) -> list:
         return [input]
 
-class GPTRunner() -> str | None:
+class GPTRunner():
     """
     Run the llm with given prompt template.
     """
 
-    def run_gpt(self, input, prompt_template, examples=[]):
+    def run_gpt(self, input, prompt_template, examples=[]) -> str | None:
         if not isinstance(input, list):
             input = [input]
         return run_template_gpt(input, prompt_template, examples)
