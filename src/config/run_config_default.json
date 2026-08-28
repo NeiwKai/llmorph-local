@@ -2,7 +2,9 @@
     "run_all": false,
 
     "tasks": {},
-    "llm_list": [],
+    "llm_list": [
+        "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K"
+    ],
 
     "data_start_index": -1,
     "data_end_index": -1,
@@ -14,7 +16,7 @@
     "llm_wait_time": 10,
     "llm_max_retries": -1,
     "llm_endpoint": "http://localhost:8089/v1",
-    "llm_for_transformation": null,
+    "llm_for_transformation": "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K",
 
     "only_generate_followup_inputs": false,
     "only_generate_source": false,

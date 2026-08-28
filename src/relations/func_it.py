@@ -57,39 +57,6 @@ RANDOM_WORDS = load_json("./resources/random_words.json")
 # 154	Capitalise important words
 # 155	Tense change
 
-class ITOpenAIGrammar(SingleInputTransformer):
-    def __init__(self, model_name: str = "gpt-4o-mini", api_key: str = None, transform_indices=[[0]]):
-        super().__init__(transform_indices)
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-        self.model_name = model_name
-
-    def _correct_grammar(self, text: str) -> str:
-        if not text or not text.strip():
-            return text
-
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Correct grammatical errors, spelling, "
-                        "and awkward phrasing in the user's text while preserving its original meaning. "
-                        "Make minimal necessary changes. Return ONLY the corrected text."
-                    )
-                },
-                {"role": "user", "content": text}
-            ],
-            temperature=0.2,
-        )
-        return response.choices[0].message.content.strip()
-
-    def nlp_transform(self, input_val: str) -> str:
-        return self._correct_grammar(input_val)
-
-    def input_transformation(self, input_list: list):
-        return self.transform_input(input_list, self.nlp_transform)
-
 class CleanText():
     def clean_text(self, text):
         lowercased = text.lower()
@@ -657,29 +624,59 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
             "I wonder for what reason garments are so pricy."],]
 
     def get_synonym(self, input):
-        prompt_template = "You are an expert NLP linguist specializing in precise contextual synonyms.\nTask: Given a context sentence and a target word, output ONLY a valid contextual synonym.\n\nRULES:\n1. PROTECT TERMS & CASE: Do NOT change acronyms (MCQA, MMT, AI), terms, or casing.\n2. PRESERVE HYPHENS: Preserve compound hyphens (e.g., 'multi-source').\n3. SCOPE MATCH: If synonym alters exact technical scope/task (e.g., 'summarization'), output the target word as-is.\n4. NO RANDOM CHANGE: If no precise synonym exists, output target word as-is.\n5. OUTPUT FORMAT: Output ONLY the replacement word—no quotes, explanations, or extra text.\n\nContext:\n\"{INPUT_0}\"\nTarget Word:\n\"{INPUT_1}\""
+        prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give a synonym for \"{INPUT_1}\". Don’t change technical terms, proper nouns, model names, or acronyms (e.g., MCQA, MMT, AI), leave it unchanged. Preserve compound hyphens (e.g., 'Multiple-choice') and exact casing. If replacing the word changes the context, keep the original word unchanged. Do not replace words with generic/unrelated words. Maintain strict grammatical correctness. If the word has no synonym, simply output the word itself. Maintain exact Part-of-Speech, tense, and singular/plural forms (e.g., Noun -> Noun, Plural -> Plural)."
         examples = [
             [["Extensive experiments demonstrate continuous improvements across models.", "experiments"], "tests"],
             [["I wonder why clothes are so expensive in this store.", "expensive"], "pricey"],
-            [["The system performs summarization and reasoning tasks.", "summarization"], "summarization"],
-            [["To address this, we propose meta transfer for low-resource QA.", "meta transfer"], "meta transfer"],
-            [["Most existing datasets are small in size.", "datasets"], "datasets"],
             [["We evaluate on multi-source settings.", "multi-source"], "multi-source"]
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
         #cleaned_new_word = self.clean_text(new_word)
         #return cleaned_new_word
         return new_word
-    
+   
+    #def replace_synonym(self, input):
+    #    keywords = self.get_keywords(input)
+    #    synonym_words = [self.get_synonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+    #    return self.replace_words(input, keywords, synonym_words)
+
     def replace_synonym(self, input):
         keywords = self.get_keywords(input)
-        synonym_words = [self.get_synonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        synonym_words = []
+        
+        # Set Cosine Similarity threshold to filter out semantic drifts/out-of-context predictions
+        SIMILARITY_THRESHOLD = 0.75 
+        
+        for keyword in keywords:
+            # Generate target synonym using the model with context
+            candidate = self.get_synonym(self.bind_context_kw(input, keyword))
+            
+            # Clean LLM output (strip quotes, spaces, and extra newlines)
+            if hasattr(self, 'clean_text'):
+                candidate = self.clean_text(candidate)
+            else:
+                candidate = candidate.strip(' "\'\n\r')
+            
+            # Case 1: If candidate is empty or identical to original keyword, keep original
+            if not candidate or candidate == keyword:
+                synonym_words.append(keyword)
+                continue
+            
+            # Case 2: Calculate Cosine Similarity between keyword and generated candidate
+            # (Replace 'compute_cosine_sim' with your actual similarity function/method)
+            sim_score = self.compute_cosine_sim(keyword, candidate)
+            
+            # Case 3: Filter by threshold
+            if sim_score >= SIMILARITY_THRESHOLD:
+                synonym_words.append(candidate) # Accept valid candidate
+            else:
+                # Fallback: Reject candidate if semantic drift occurs (e.g., sim < 0.75)
+                synonym_words.append(keyword)
+                
         return self.replace_words(input, keywords, synonym_words)
 
     def input_transformation(self, input: list):
         return self.transform_input(input, self.replace_synonym)
-
-
 
 class ReplaceKeywordDifferenceRE(ReplaceKeyword):
     def get_keywords_gpt(self, text, input_1, input_2):
