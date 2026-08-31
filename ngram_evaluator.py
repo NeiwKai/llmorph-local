@@ -1,256 +1,466 @@
-import difflib
+import csv
 import json
 import os
-import re
 from datetime import datetime
-from typing import List, Tuple
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional, Tuple
 
+# Headless backend to prevent X11 display pixmap overflow errors
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import spacy
+from sentence_transformers import SentenceTransformer, util
 
-# Load spaCy NLP model with static vector support
-nlp = spacy.load("en_core_web_md")
 
-# ----------------------------------------------------
-# 1. TEXT TOKENIZATION (Using spaCy Doc)
-# ----------------------------------------------------
-def tokenize_with_spacy(text: str) -> List[str]:
-    """
-    Tokenizes raw text into clean tokens using spaCy,
-    filtering out standalone punctuation and whitespace.
-    """
-    doc = nlp(text)
-    return [token.text.lower() for token in doc if not token.is_punct and not token.is_space]
+class Tokenizer:
+    """Wraps spaCy for tokenization and per-shot token-length scanning."""
 
-# ----------------------------------------------------
-# 2. EXTRACT N-GRAM TRANSFORMATIONS (Using spaCy Spans)
-# ----------------------------------------------------
-def extract_ngram_transformations(tokens1: List[str], tokens2: List[str], n: int) -> List[Tuple[str, str]]:
-    """
-    Finds difference boundaries between source and target tokens,
-    then uses spaCy Doc indexing to extract cleanly windowed n-gram spans.
-    """
-    doc1 = spacy.tokens.Doc(nlp.vocab, words=tokens1)
-    doc2 = spacy.tokens.Doc(nlp.vocab, words=tokens2)
+    def __init__(self, spacy_model: str = "en_core_web_md"):
+        # Load spaCy pipeline strictly for tokenization
+        self.nlp = spacy.load(spacy_model, disable=["parser", "ner", "tagger"])
 
-    matcher = difflib.SequenceMatcher(None, tokens1, tokens2)
-    pairs = []
+    def tokenize(self, text: str) -> List[str]:
+        """Tokenizes text using spaCy, stripping standalone punctuation and whitespace."""
+        doc = self.nlp(text)
+        return [
+            token.text.lower()
+            for token in doc
+            if not token.is_punct and not token.is_space
+        ]
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag in ['replace', 'delete', 'insert']:
-            if n == 1:
-                # 1-Gram direct token replacement
-                if tag == 'replace':
-                    orig_len = i2 - i1
-                    trans_len = j2 - j1
-                    min_len = min(orig_len, trans_len)
-                    for k in range(min_len):
-                        w1 = doc1[i1 + k].text
-                        w2 = doc2[j1 + k].text
-                        if w1 != w2:
-                            pair = (w1, w2)
-                            if pair not in pairs:
-                                pairs.append(pair)
+    @staticmethod
+    def _extract_texts(item: dict) -> Tuple[str, Optional[str]]:
+        """Pulls (source_text, followup_text) out of one dataset entry."""
+        src_input = item.get("source_input", [])
+        src_text = " ".join(src_input) if isinstance(src_input, list) else str(src_input)
+
+        followup_list = item.get("followup_inputs", [])
+        if not followup_list or not followup_list[0]:
+            return src_text, None
+
+        fol_target = followup_list[0]
+        fol_text = " ".join(fol_target) if isinstance(fol_target, list) else str(fol_target)
+        return src_text, fol_text
+
+    def scan_token_lengths(self, data_entries: List[dict]) -> Dict[int, bool]:
+        """Scans dataset to determine equal length vs mismatched shots."""
+        equality_map: Dict[int, bool] = {}
+        mismatched_count = 0
+
+        print("\n--- Running Dataset Token Length Scan ---")
+        for shot_idx, item in enumerate(data_entries):
+            shot_id = item.get("id", shot_idx)
+            src_text, fol_text = self._extract_texts(item)
+            if fol_text is None:
+                continue
+
+            len_src = len(self.tokenize(src_text))
+            len_fol = len(self.tokenize(fol_text))
+
+            if len_src == len_fol:
+                equality_map[shot_id] = True
             else:
-                # Window expansion for context-level N-Grams
-                orig_len = i2 - i1
-                pad_i = max(0, n - orig_len)
-                start_i = max(0, i1 - (pad_i // 2 + pad_i % 2))
-                end_i = min(len(doc1), i2 + (pad_i // 2))
-                if end_i - start_i < n and start_i > 0:
-                    start_i = max(0, end_i - n)
-                if end_i - start_i < n and end_i < len(doc1):
-                    end_i = min(len(doc1), start_i + n)
+                equality_map[shot_id] = False
+                mismatched_count += 1
+                print(
+                    f"  - Shot #{shot_id}: Mismatch (Source: {len_src} tokens | "
+                    f"Followup: {len_fol} tokens | Diff: {len_fol - len_src:+d}) "
+                    f"-> routed to Anchor Alignment"
+                )
 
-                trans_len = j2 - j1
-                pad_j = max(0, n - trans_len)
-                start_j = max(0, j1 - (pad_j // 2 + pad_j % 2))
-                end_j = min(len(doc2), j2 + (pad_j // 2))
-                if end_j - start_j < n and start_j > 0:
-                    start_j = max(0, end_j - n)
-                if end_j - start_j < n and end_j < len(doc2):
-                    end_j = min(len(doc2), start_j + n)
+        print(
+            f"\n[Scan Summary] Equal length shots: {len(data_entries) - mismatched_count} "
+            f"| Mismatched shots: {mismatched_count}"
+        )
+        return equality_map
 
-                # Extract as spaCy Spans and convert to string
-                span1 = doc1[start_i:end_i].text.strip()
-                span2 = doc2[start_j:end_j].text.strip()
 
-                if span1 and span2 and span1 != span2:
-                    pair = (span1, span2)
-                    if pair not in pairs:
-                        pairs.append(pair)
+class NgramExtractor:
+    """Builds position-aligned n-gram pairs from two token sequences."""
 
-    return pairs
-
-# ----------------------------------------------------
-# 3. VISUALIZATION TABLE PLOTTER
-# ----------------------------------------------------
-def plot_metric_table(
-    metric_list: List[dict],
-    mode: str,
-    threshold: float,
-    precision: float,
-    task_name: str,
-    date_time_str: str,
-    gram_level: int
-):
-    # Sort: PASS items first, then by Cosine Similarity descending
-    if mode == "Synonym":
-        metric_list.sort(key=lambda x: (not x['pass_threshold'], -x['cosine_similarity']))
-    else:
-        metric_list.sort(key=lambda x: (not x['pass_threshold'], x['cosine_similarity']))
-    headers = ["Status", "Original Phrase", "Transformed Phrase", "Cosine Sim"]
-    table_data = []
-    
-    for item in metric_list:
-        status_text = "PASS" if item['pass_threshold'] else "FAIL"
-        table_data.append([
-            status_text,
-            item['original'],
-            item['transformed'],
-            f"{item['cosine_similarity']:.4f}"
-        ])
-
-    fig_height = max(len(table_data) * 0.5 + 3.0, 5.0)
-    fig, ax = plt.subplots(figsize=(14, fig_height))
-    ax.axis('off')
-    
-    threshold_str = f">= {threshold}" if mode == "Synonym" else f"<= {threshold}"
-    title_text = f"N-Gram Level: {gram_level}-Gram | Mode: {mode} Mode (spaCy)\n" \
-                 f"Task: {task_name} | Precision: {precision * 100:.2f}% | Pass Threshold: {threshold_str}"
-    plt.title(title_text, fontsize=13, fontweight='bold', pad=15)
-
-    table = ax.table(
-        cellText=table_data,
-        colLabels=headers,
-        cellLoc='center',
-        loc='center'
-    )
-    
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1.2, 1.8)
-
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_facecolor('#2B4C7E')
-            cell.set_text_props(color='white', fontweight='bold')
+    @staticmethod
+    def extract_standard_sliding_ngrams(
+        tokens1: List[str], tokens2: List[str], n: int
+    ) -> List[Tuple[int, str, str]]:
+        pairs = []
+        if n == 1:
+            ngrams1 = [[t] for t in tokens1]
+            ngrams2 = [[t] for t in tokens2]
         else:
-            if col == 0:
-                if table_data[row - 1][0] == "PASS":
-                    cell.set_facecolor('#D4EDDA')
-                    cell.set_text_props(color='#155724', fontweight='bold')
-                else:
-                    cell.set_facecolor('#F8D7DA')
-                    cell.set_text_props(color='#721C24', fontweight='bold')
+            ngrams1 = [tokens1[i : i + n] for i in range(len(tokens1) - n + 1)] if len(tokens1) >= n else [tokens1]
+            ngrams2 = [tokens2[i : i + n] for i in range(len(tokens2) - n + 1)] if len(tokens2) >= n else [tokens2]
+
+        min_len = min(len(ngrams1), len(ngrams2))
+        for pos_idx in range(min_len):
+            span1 = " ".join(ngrams1[pos_idx]).strip()
+            span2 = " ".join(ngrams2[pos_idx]).strip()
+
+            if span1 and span2 and span1 != span2:
+                pairs.append((pos_idx, span1, span2))
+
+        return pairs
+
+    @staticmethod
+    def _build_alignment_map(tokens1: List[str], tokens2: List[str]) -> List[int]:
+        matcher = SequenceMatcher(None, tokens1, tokens2)
+        map_j: List[Optional[int]] = [None] * len(tokens1)
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                for k in range(i2 - i1):
+                    map_j[i1 + k] = j1 + k
+            elif tag == "replace":
+                len1, len2 = i2 - i1, j2 - j1
+                for k in range(len1):
+                    map_j[i1 + k] = j1 + min(k, max(len2 - 1, 0))
+            elif tag == "delete":
+                for k in range(i2 - i1):
+                    map_j[i1 + k] = min(j1, max(len(tokens2) - 1, 0))
+
+        for i in range(len(map_j)):
+            if map_j[i] is None:
+                map_j[i] = min(i, max(len(tokens2) - 1, 0))
+
+        return map_j  # type: ignore[return-value]
+
+    def extract_anchor_aligned_ngrams(
+        self, tokens1: List[str], tokens2: List[str], n: int
+    ) -> List[Tuple[int, str, str]]:
+        if not tokens1:
+            return []
+
+        map_j = self._build_alignment_map(tokens1, tokens2)
+        len1 = len(tokens1)
+        window1 = (
+            [tokens1[i : i + n] for i in range(len1 - n + 1)]
+            if len1 >= n
+            else [tokens1]
+        )
+
+        pairs = []
+        for pos_idx, w1 in enumerate(window1):
+            j_start = map_j[pos_idx] if pos_idx < len(map_j) else None
+            if j_start is None or not tokens2:
+                continue
+            j_start = max(0, min(j_start, len(tokens2) - 1))
+            w2 = tokens2[j_start : j_start + n]
+            if len(w2) < n:
+                w2 = tokens2[max(0, len(tokens2) - n):]
+
+            span1 = " ".join(w1).strip()
+            span2 = " ".join(w2).strip()
+            if span1 and span2 and span1 != span2:
+                pairs.append((pos_idx, span1, span2))
+
+        return pairs
+
+
+class SimilarityScorer:
+    """
+    Computes Token-wise Cosine Similarity using SentenceTransformer exclusively
+    across all N-Gram levels.
+    """
+
+    def __init__(self, sentence_model_name: str = "all-mpnet-base-v2"):
+        self.model = SentenceTransformer(sentence_model_name)
+
+    def _get_single_word_similarity(self, w1: str, w2: str) -> float:
+        """Computes similarity between two single words using SentenceTransformer embeddings."""
+        if w1 == w2:
+            return 1.0
+
+        emb1 = self.model.encode(w1, convert_to_tensor=True)
+        emb2 = self.model.encode(w2, convert_to_tensor=True)
+        return float(util.cos_sim(emb1, emb2).item())
+
+    def calculate_token_averaged_similarity(
+        self, orig_text: str, mod_text: str, gram_level: int, mode: str
+    ) -> float:
+        """
+        Calculates similarity per token position with SentenceTransformer,
+        then computes the average score (e.g., divided by 2 for 2-gram, by 3 for 3-gram).
+        """
+        words1 = orig_text.split()
+        words2 = mod_text.split()
+
+        # For 1-Gram (Direct single word)
+        if gram_level == 1:
+            raw_score = self._get_single_word_similarity(orig_text, mod_text)
+            return -raw_score if mode == "Antonym" else raw_score
+
+        # For 2-Gram, 3-Gram, etc.
+        token_scores = []
+        max_tokens = max(len(words1), len(words2), gram_level)
+
+        for i in range(max_tokens):
+            w1 = words1[i] if i < len(words1) else ""
+            w2 = words2[i] if i < len(words2) else ""
+
+            if w1 and w2:
+                sim = self._get_single_word_similarity(w1, w2)
             else:
-                cell.set_facecolor('#F8F9FA' if row % 2 == 0 else '#FFFFFF')
+                sim = 0.0
 
-    plt.subplots_adjust(top=0.82, bottom=0.05, left=0.05, right=0.95)
+            token_scores.append(sim)
 
-    output_dir = os.path.join("plots", mode.capitalize(), f"plot-{gram_level}gram")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    plot_filename = f"{task_name}_{mode.lower()}_{date_time_str}_{gram_level}gram_table.png"
-    plot_path = os.path.join(output_dir, plot_filename)
-    
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"\nSaved table plot to '{plot_path}'")
-    plt.show()
+        # Average across N-gram elements: (sim1 + sim2 + ... + simN) / N
+        avg_score = sum(token_scores) / len(token_scores) if token_scores else 0.0
 
-# ----------------------------------------------------
-# 4. MAIN EXECUTION PIPELINE
-# ----------------------------------------------------
-def main():
-    file_path = input("Enter JSON file path (e.g., data.json): ").strip()
+        return -avg_score if mode == "Antonym" else avg_score
 
-    if not os.path.exists(file_path):
-        print(f"\n[Error] File not found: '{file_path}'")
-        return
-    
-    print("\nSelect N-Gram level:")
-    print("1: 1-Gram (Word-to-Word)")
-    print("2: 2-Gram (Bi-gram Context)")
-    print("3: 3-Gram (Tri-gram Context)")
-    gram_choice = input("Enter choice (or type any integer): ").strip()
-    try:
-        gram_level = int(gram_choice) if int(gram_choice) >= 1 else 1
-    except ValueError:
-        gram_level = 1
 
-    print("\nSelect evaluation mode:")
-    print("1: Synonym (Cosine >= 0.8)")
-    print("2: Antonym (Cosine <= -0.8)")
-    mode_choice = input("Enter choice (1 or 2): ").strip()
+class DatasetEvaluator:
+    """Runs extraction + scoring across an entire dataset for one gram level."""
 
-    if mode_choice == '2':
-        mode = "Antonym"
-        threshold = -0.8
-    else:
-        mode = "Synonym"
-        threshold = 0.8
+    def __init__(self, tokenizer: Tokenizer, extractor: NgramExtractor, scorer: SimilarityScorer):
+        self.tokenizer = tokenizer
+        self.extractor = extractor
+        self.scorer = scorer
 
-    with open(file_path, 'r', encoding='utf-8') as f:
-        json_data = json.load(f)
+    def evaluate(
+        self,
+        data_entries: List[dict],
+        equality_map: Dict[int, bool],
+        gram_level: int,
+        mode: str,
+        threshold: float = 0.8,
+    ) -> Dict[str, Any]:
+        all_pairs_collected = []
+        total_passed = 0
+        total_transformations = 0
 
-    task_name = json_data.get('task_name', 'question_answering')
+        print(f"\nProcessing {len(data_entries)} shots ({gram_level}-Gram Token-wise Average)...")
 
-    text1_list = json_data['data'][0]['source_input']
-    text1_raw = " ".join(text1_list)
-    
-    text2_list = json_data['data'][0]['followup_inputs'][2]
-    text2_raw = " ".join(text2_list)
+        for shot_idx, item in enumerate(data_entries):
+            shot_id = item.get("id", shot_idx)
+            src_text, fol_text = self.tokenizer._extract_texts(item)
+            if fol_text is None:
+                continue
 
-    tokens1 = tokenize_with_spacy(text1_raw)
-    tokens2 = tokenize_with_spacy(text2_raw)
+            tokens_src = self.tokenizer.tokenize(src_text)
+            tokens_fol = self.tokenizer.tokenize(fol_text)
 
-    aligned_pairs = extract_ngram_transformations(tokens1, tokens2, gram_level)
+            is_equal = equality_map.get(shot_id, True)
+            if is_equal:
+                pairs = self.extractor.extract_standard_sliding_ngrams(tokens_src, tokens_fol, gram_level)
+                method_used = "Standard Sliding"
+            else:
+                pairs = self.extractor.extract_anchor_aligned_ngrams(tokens_src, tokens_fol, gram_level)
+                method_used = "Anchor Alignment"
 
-    if not aligned_pairs:
-        print(f"\nNo {gram_level}-Gram transformations found matching criteria.")
-        return
+            for pos_idx, orig_text, mod_text in pairs:
+                sim_score = self.scorer.calculate_token_averaged_similarity(
+                    orig_text, mod_text, gram_level, mode
+                )
 
-    print(f"\nCalculating similarity for {len(aligned_pairs)} pairs using spaCy vectors...")
-    metric_list = []
-    
-    for orig_text, mod_text in aligned_pairs:
-        doc1 = nlp(orig_text)
-        doc2 = nlp(mod_text)
-        
-        # spaCy computes cosine similarity between vector representations
-        if doc1.vector_norm and doc2.vector_norm:
-            sim_score = float(doc1.similarity(doc2))
-        else:
-            sim_score = 0.0
+                is_valid = (sim_score >= threshold) if mode == "Synonym" else (sim_score <= threshold)
 
-        # Flip sign for Antonym mode
-        if mode == "Antonym":
-            sim_score = -sim_score
+                if is_valid:
+                    total_passed += 1
+                total_transformations += 1
 
-        if mode == "Synonym":
-            is_valid = (sim_score >= threshold)
-        else:
-            is_valid = (sim_score <= threshold)
-                    
-        metric_list.append({
-            "original": orig_text,
-            "transformed": mod_text,
-            "cosine_similarity": round(sim_score, 4),
-            "pass_threshold": is_valid
-        })
+                all_pairs_collected.append({
+                    "shot_id": shot_id,
+                    "word_pos": pos_idx,
+                    "method": method_used,
+                    "original": orig_text,
+                    "transformed": mod_text,
+                    "cosine_similarity": round(sim_score, 4),
+                    "pass_threshold": is_valid,
+                })
 
-    valid_changes = sum(1 for m in metric_list if m['pass_threshold'])
-    precision = (valid_changes / len(metric_list)) if metric_list else 0.0
+        micro_precision = (total_passed / total_transformations) if total_transformations > 0 else 0.0
 
-    print(f"\nSelected Level: {gram_level}-Gram | Target Mode: {mode}")
-    print(f"Condition: {'Cosine >= ' + str(threshold) if mode == 'Synonym' else 'Cosine <= ' + str(threshold)}")
-    print(f"Valid Changes Passed Threshold: {valid_changes} / {len(metric_list)}")
-    print(f"Precision: {precision:.4f} ({precision * 100:.2f}%)")
+        return {
+            "total_shots": len(data_entries),
+            "total_transformations": total_transformations,
+            "total_passed": total_passed,
+            "micro_precision": micro_precision,
+            "metrics": all_pairs_collected,
+        }
 
-    match_dt = re.search(r'\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}', file_path)
-    date_time_str = match_dt.group(0) if match_dt else datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    plot_metric_table(metric_list, mode, threshold, precision, task_name, date_time_str, gram_level)
+class ResultExporter:
+    """Writes evaluation results to CSV and a summary plot image."""
+
+    @staticmethod
+    def export_csv(
+        metric_list: List[dict],
+        mode: str,
+        output_dir: str,
+        llm_name: str,
+        relation_name: str,
+        gram_level: int,
+        date_time_str: str,
+    ) -> None:
+        metric_list.sort(key=lambda x: (int(x["shot_id"]), int(x["word_pos"])))
+
+        csv_filename = f"{llm_name}_rel{relation_name}_{mode.lower()}_{date_time_str}_{gram_level}gram_sequential.csv"
+        csv_path = os.path.join(output_dir, csv_filename)
+
+        with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+            writer.writerow([
+                "Shot_ID",
+                "Position",
+                "Status",
+                "Original_NGram",
+                "Transformed_NGram",
+                "Cosine_Similarity",
+            ])
+            for item in metric_list:
+                status_text = "PASS" if item["pass_threshold"] else "FAIL"
+                writer.writerow([
+                    f"#{item['shot_id']}",
+                    item["word_pos"],
+                    status_text,
+                    item["original"],
+                    item["transformed"],
+                    f"{item['cosine_similarity']:.4f}",
+                ])
+
+        print(f"[Saved] Evaluation CSV correctly formatted and saved to: '{csv_path}'")
+
+    @staticmethod
+    def save_summary_plot(
+        summary_res: dict,
+        mode: str,
+        gram_level: int,
+        llm_name: str,
+        task_name: str,
+        relation_name: str,
+        output_dir: str,
+        date_str: str,
+    ) -> None:
+        headers = ["Metric Description", "Value"]
+        table_data = [
+            ["Model Evaluated", llm_name],
+            ["Relation ID", str(relation_name)],
+            ["Evaluation Level", f"{gram_level}-Gram"],
+            ["Cosine Engine", "SentenceTransformer (all-mpnet-base-v2)"],
+            ["Total Evaluated Shots", f"{summary_res['total_shots']:,}"],
+            ["Total Evaluated N-Grams", f"{summary_res['total_transformations']:,}"],
+            ["Passed Transformations", f"{summary_res['total_passed']:,}"],
+            ["Overall Dataset Precision", f"{summary_res['micro_precision'] * 100:.2f}%"],
+        ]
+
+        fig, ax = plt.subplots(figsize=(9.2, 4.2))
+        ax.axis("off")
+
+        plt.title(
+            f"Embedding Evaluation Summary ({summary_res['total_shots']} Shots)\n"
+            f"Task: {task_name} | Mode: {mode} | Level: {gram_level}-Gram",
+            fontsize=12,
+            fontweight="bold",
+            pad=12,
+        )
+
+        table = ax.table(
+            cellText=table_data, colLabels=headers, cellLoc="center", loc="center"
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.8)
+
+        for (row, col), cell in table.get_celld().items():
+            if row == 0:
+                cell.set_facecolor("#2B4C7E")
+                cell.set_text_props(color="white", fontweight="bold")
+            else:
+                cell.set_facecolor("#F8F9FA" if row % 2 == 0 else "#FFFFFF")
+
+        plot_filename = f"{llm_name}_rel{relation_name}_{mode.lower()}_{date_str}_{gram_level}gram_summary.png"
+        plot_path = os.path.join(output_dir, plot_filename)
+
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[Saved] Summary image saved to: '{plot_path}'")
+
+
+class EvaluationPipeline:
+    """Orchestrates the full CLI flow."""
+
+    def __init__(
+        self,
+        spacy_model: str = "en_core_web_md",
+        sentence_model_name: str = "all-mpnet-base-v2",
+    ):
+        self.tokenizer = Tokenizer(spacy_model)
+        self.extractor = NgramExtractor()
+        self.scorer = SimilarityScorer(sentence_model_name)
+        self.evaluator = DatasetEvaluator(self.tokenizer, self.extractor, self.scorer)
+        self.exporter = ResultExporter()
+
+    @staticmethod
+    def _prompt_gram_levels() -> List[int]:
+        gram_input = input("\nEnter N-Gram levels to run, comma-separated (e.g., 1,2,3): ").strip()
+        try:
+            gram_levels = sorted(set(int(g.strip()) for g in gram_input.split(",") if g.strip()))
+            return [g for g in gram_levels if g >= 1] or [1, 2, 3]
+        except ValueError:
+            return [1, 2, 3]
+
+    @staticmethod
+    def _prompt_mode() -> Tuple[str, float]:
+        print("\nSelect Evaluation Mode:")
+        print("1: Synonym (Cosine >= 0.8)")
+        print("2: Antonym (Cosine <= -0.8)")
+        mode_choice = input("Enter choice (1 or 2): ").strip()
+        if mode_choice == "2":
+            return "Antonym", -0.8
+        return "Synonym", 0.8
+
+    def run(self) -> None:
+        file_path = input("Enter JSON file path: ").strip()
+        if not os.path.exists(file_path):
+            print(f"[Error] File not found: '{file_path}'")
+            return
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            json_obj = json.load(f)
+
+        data_entries = json_obj.get("data", [])
+        if not data_entries:
+            print("[Error] No entries found in JSON 'data' field.")
+            return
+
+        equality_map = self.tokenizer.scan_token_lengths(data_entries)
+
+        gram_levels = self._prompt_gram_levels()
+        mode, threshold = self._prompt_mode()
+
+        llm_name = json_obj.get("llm_name", "unknown_model")
+        task_name = json_obj.get("task_name", "question_answering")
+        relation_name = json_obj.get("relation_name", "N/A")
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        for gram_level in gram_levels:
+            results = self.evaluator.evaluate(data_entries, equality_map, gram_level, mode, threshold)
+
+            print(f"\n================ DATASET EVALUATION RESULTS ({gram_level}-GRAM) ================")
+            print(f"Model:                 {llm_name}")
+            print(f"Task:                  {task_name} (Relation {relation_name})")
+            print(f"Cosine Engine:         SentenceTransformer (all-mpnet-base-v2)")
+            print(f"Threshold:             {threshold}")
+            print(f"Total Shots:           {results['total_shots']}")
+            print(f"Total N-grams Found:   {results['total_transformations']}")
+            print(f"Total Passed Criteria: {results['total_passed']}")
+            print(f"Overall Precision:     {results['micro_precision'] * 100:.2f}%")
+            print("============================================================")
+
+            output_dir = os.path.join("plots", mode.capitalize(), f"plot-{gram_level}gram")
+            os.makedirs(output_dir, exist_ok=True)
+
+            if results["metrics"]:
+                self.exporter.export_csv(
+                    results["metrics"], mode, output_dir, llm_name, relation_name, gram_level, date_str
+                )
+
+            self.exporter.save_summary_plot(
+                results, mode, gram_level, llm_name, task_name, relation_name, output_dir, date_str
+            )
+
 
 if __name__ == "__main__":
-    main()
+    EvaluationPipeline().run()
