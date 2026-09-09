@@ -56,6 +56,7 @@ PySocks==1.7.1
 python-dateutil==2.8.2
 pytz==2024.1
 PyYAML==6.0.1
+redis==5.0.1 # queue for Hermes (transformation LLM) requests
 regex==2023.12.25
 reportlab==5.0.0 # for generate pdf report
 requests==2.31.0

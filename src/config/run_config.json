@@ -5,8 +5,8 @@
     "llm_list": [
       "gemma-3-4b-it-q4_k_m"
     ],
-    "llm_endpoint": "http://localhost:8080/v1",
-    "llm_for_transformation": "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K",
+    "llm_endpoint": "http://localhost:8088/v1",
+    "llm_for_transformation": "gemma-3-4b-it-q4_k_m",
 
     "checkpoint_interval": 50,
     "continue_from_checkpoint": true,

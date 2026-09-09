@@ -13,6 +13,8 @@ def main():
     parser.add_argument("-i", "--input-data", required=True, type=str, help="The path to the JSON file containing the inputs. Structured as an array of data points.")
     parser.add_argument("-o", "--base-dir", required=True, type=str, help="The path to the directory where caches and outputs will be stored.")
     parser.add_argument("-r", "--replace-perc", required=False, type=float, metavar="PERCENT", nargs="?", default=0.1, help="The ratio value for generating follow up inputs (range: 0.0 - 1.0, default: 0.1).")
+    parser.add_argument("-n", "--num-threads", required=False, type=int, metavar="N", default=1, help="Number of data points to process concurrently (SUT/Hermes calls in flight at once, default: 1).")
+    parser.add_argument("--parallel-input-transformation", action="store_true", help="Also run input_transformation (follow-up input generation) fully in parallel across threads, instead of serializing it. Only safe for MRs whose input_transformation only calls an LLM (e.g. ITGPT/ITGPTSentence) -- unsafe for ones using a local model (spaCy, nlpaug, KeyBERT, ...).")
 
     args = parser.parse_args()
 
@@ -22,6 +24,8 @@ def main():
         "existing_source_inputs": args.input_data,
         "dir_base_default": args.base_dir,
         "replace_perc": args.replace_perc,
+        "num_threads": args.num_threads,
+        "parallel_input_transformation": args.parallel_input_transformation,
     }
 
     run_using_config(config)

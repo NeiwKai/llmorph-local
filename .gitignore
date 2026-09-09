@@ -184,3 +184,6 @@ cython_debug/
 .idea
 relations.json
 .python-version
+
+# large downloaded model artifact (nlpaug word2vec) -- never commit this
+GoogleNews-vectors-negative300.bin

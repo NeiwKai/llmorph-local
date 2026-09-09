@@ -1,7 +1,54 @@
 from file_handler import save_json, load_json, get_timestamp, file_exists
 from relations.func_base import FuncDB, FuncIT, FuncOR, FuncSUT, FuncVerify
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import os
+
+
+def serialize_if_parallel(fn, num_threads):
+    """
+    Some func_it/func_or implementations wrap a local ML model (spaCy,
+    nlpaug, KeyBERT, SentenceTransformer's fast tokenizer, ...) that is
+    not safe to call from multiple threads at once -- e.g. HuggingFace's
+    fast tokenizers raise "RuntimeError: Already borrowed" under
+    concurrent use. Others (ITGPT, ORGPT, ...) only make an LLM call
+    (SUT client or Hermes queue), which is thread-safe. mt_run.py can't
+    tell which is which generically, so when num_threads > 1 this wraps
+    `fn` with a lock, serializing input_transformation/output_relation
+    calls across threads as a safe default. run_sut is never wrapped
+    this way: it is always an LLM call (network-bound), so it is left to
+    run fully in parallel -- it's also normally the dominant per-item cost.
+    """
+    if not num_threads or num_threads <= 1:
+        return fn
+    lock = threading.Lock()
+    def wrapped(*args, **kwargs):
+        with lock:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def parallel_map_ordered(fn, items, num_threads):
+    """
+    Applies fn to each item and yields the results in the same order as
+    `items` (like the built-in map), running up to num_threads calls
+    concurrently when num_threads > 1 (e.g. several SUT/Hermes requests
+    in flight at once instead of one at a time). Callers still consume
+    this one result at a time inside their normal per-item loop, so
+    checkpointing and progress reporting behave exactly as before --
+    work just completes faster.
+    """
+    if not num_threads or num_threads <= 1:
+        for item in items:
+            yield fn(item)
+        return
+
+    executor = ThreadPoolExecutor(max_workers=num_threads)
+    try:
+        yield from executor.map(fn, items)
+    finally:
+        executor.shutdown(wait=True)
 
 def run_test(llm_name : str, task_name : str, relation_name : str, get_dataset : FuncDB, input_transformation : FuncIT, run_sut : FuncSUT, output_relation : FuncOR, run_config : dict, checkpoint : dict | None = None, verify_source_input : FuncVerify = None, verify_source_output : FuncVerify = None, verify_followup_input : FuncVerify = None):
     # print("Running test...")
@@ -79,33 +126,39 @@ def get_save_source_input_data(get_dataset: FuncDB, task_name: str, run_config: 
     return get_dataset()
 
 
-def get_save_verify(data: list, to_verify: list[bool], verify_func: FuncVerify, verification_name: str, uid: str, verification_dir: str):
+def get_save_verify(data: list, to_verify: list[bool], verify_func: FuncVerify, verification_name: str, uid: str, verification_dir: str, run_config: dict):
     # caching verification
     if verify_func is None:
         return None
-    
+
     filename = os.path.join(verification_dir, f"{verification_name}__{uid}.json")
     if not file_exists(filename):
         print(f"Cached verification not found. Doing {verification_name}...")
-        verify_list = do_verify(data, to_verify, verify_func)
+        verify_list = do_verify(data, to_verify, verify_func, run_config)
         save_json(verify_list, filename)
         return verify_list
     print(f"Cached verification found at {filename}")
     return load_json(filename)
 
-def do_verify(data: list, to_verify: list[bool], verify_func: FuncVerify):
-    return [verify_func(d) if do_verif else None for d, do_verif in tqdm(zip(data, to_verify), total=len(data))]
+def do_verify(data: list, to_verify: list[bool], verify_func: FuncVerify, run_config: dict):
+    def verify_one(d_and_do_verif):
+        d, do_verif = d_and_do_verif
+        return verify_func(d) if do_verif else None
+
+    items = list(zip(data, to_verify))
+    results = parallel_map_ordered(verify_one, items, run_config.get("num_threads", 1))
+    return list(tqdm(results, total=len(items)))
 
 def get_save_vsi(source_inputs: list, verify_source_input: FuncVerify, task_name: str, relation_name: str, run_config: dict):
     source_inputs = [i[0] for i in source_inputs]
     to_verify = [True] * len(source_inputs)
-    return get_save_verify(source_inputs, to_verify, verify_source_input, "verify_source_input", f"{task_name}__{relation_name}", run_config["dir_vsi"])
+    return get_save_verify(source_inputs, to_verify, verify_source_input, "verify_source_input", f"{task_name}__{relation_name}", run_config["dir_vsi"], run_config)
 
 def get_save_vso(source_outputs: list, source_input_verification: list[bool|None], verify_source_output: FuncVerify, task_name: str, relation_name: str, run_config: dict):
-    return get_save_verify(source_outputs, source_input_verification, verify_source_output, "verify_source_output", f"{task_name}__{relation_name}", run_config["dir_vso"])
+    return get_save_verify(source_outputs, source_input_verification, verify_source_output, "verify_source_output", f"{task_name}__{relation_name}", run_config["dir_vso"], run_config)
 
 def get_save_vfi(followup_inputs: list, source_input_verification: list[bool|None],  verify_followup_input: FuncVerify, task_name: str, relation_name: str, run_config: dict):
-    return get_save_verify(followup_inputs, source_input_verification, verify_followup_input, "verify_followup_input", f"{task_name}__{relation_name}", run_config["dir_vfi"])
+    return get_save_verify(followup_inputs, source_input_verification, verify_followup_input, "verify_followup_input", f"{task_name}__{relation_name}", run_config["dir_vfi"], run_config)
 
 
 
@@ -128,16 +181,17 @@ def run_and_save_source_outputs(dataset, run_sut : FuncSUT, filename : str, llm_
     if checkpoint and checkpoint["checkpoint_type"] != "source_outputs": checkpoint = None
     outputs = [] if not checkpoint else checkpoint["data"]
     checkpoint_interval = run_config["checkpoint_interval"]
+    start_id = checkpoint["next_id"] if checkpoint else 0
 
-    for i, data in tqdm(enumerate(dataset), total=len(dataset), desc=f"Generating source outputs for ({llm_name}, {task_name})"):
-        if checkpoint and i < checkpoint["next_id"]: # start from checkpoint
-            continue
-        if not isinstance(data, list):
-            data = [data]
-        outputs.append(run_sut(data))
+    remaining = [data if isinstance(data, list) else [data] for data in dataset[start_id:]]
+    results = parallel_map_ordered(run_sut, remaining, run_config.get("num_threads", 1))
+
+    for offset, result in tqdm(enumerate(results), total=len(remaining), desc=f"Generating source outputs for ({llm_name}, {task_name})"):
+        i = start_id + offset
+        outputs.append(result)
         if checkpoint_interval and checkpoint_interval > 0 and i % checkpoint_interval == checkpoint_interval - 1:
             save_checkpoint(outputs, checkpoint_type="source_outputs", next_id=i+1, llm_name=llm_name, task_name=task_name, relation_name="", run_config=run_config)
-    
+
     print(f"Source outputs cached to {filename}")
     save_json(outputs, filename)
 
@@ -159,23 +213,38 @@ def run_and_save_followup_inputs(dataset, input_transformation : FuncIT, source_
     if checkpoint and checkpoint["checkpoint_type"] != "followup_inputs": checkpoint = None
     inputs = [] if not checkpoint else checkpoint["data"]
     checkpoint_interval = run_config["checkpoint_interval"]
+    start_id = checkpoint["next_id"] if checkpoint else 0
+    num_threads = run_config.get("num_threads", 1)
 
-    for i, data in tqdm(enumerate(dataset), total=len(dataset), desc=f"Generating follow-up inputs for ({task_name}, {relation_name})"):
-        if checkpoint and i < checkpoint["next_id"]: # start from checkpoint
-            continue
-        if not isinstance(data, list):
-            data = [data]
+    # By default input_transformation is serialized behind a lock even when
+    # num_threads > 1, because several implemented MRs wrap a local ML model
+    # (spaCy, nlpaug, KeyBERT, a SentenceTransformer's fast tokenizer, ...)
+    # that isn't safe to call concurrently. Set "parallel_input_transformation":
+    # true in the run config (only) when you know the MR being run here calls
+    # just an LLM (e.g. ITGPT/ITGPTSentence, which only go through the Hermes
+    # queue) to skip that lock and let this step run fully in parallel too.
+    if run_config.get("parallel_input_transformation"):
+        safe_input_transformation = input_transformation
+    else:
+        safe_input_transformation = serialize_if_parallel(input_transformation, num_threads)
 
+    def transform_one(i):
+        data = dataset[i]
+        data = data if isinstance(data, list) else [data]
         # verify source input
         if source_input_verification and not source_input_verification[i]:
-            followup_inputs = None
-        else:
-            followup_inputs = input_transformation(data)
-        inputs.append(followup_inputs)
+            return None
+        return safe_input_transformation(data)
 
+    remaining_indices = list(range(start_id, len(dataset)))
+    results = parallel_map_ordered(transform_one, remaining_indices, num_threads)
+
+    for offset, followup_inputs in tqdm(enumerate(results), total=len(remaining_indices), desc=f"Generating follow-up inputs for ({task_name}, {relation_name})"):
+        i = start_id + offset
+        inputs.append(followup_inputs)
         if checkpoint_interval and checkpoint_interval > 0 and i % checkpoint_interval == checkpoint_interval - 1:
             save_checkpoint(inputs, checkpoint_type="followup_inputs", next_id=i+1, llm_name="", task_name=task_name, relation_name=relation_name, run_config=run_config)
-    
+
     print(f"Follow-up inputs cached to {filename}")
     save_json(inputs, filename)
 
@@ -200,27 +269,38 @@ def process_dataset(dataset,
 
     total_length = min(len(dataset), len(source_output_cache), len(followup_input_cache))
 
-    for i, (source_input, source_output, followup_input) in tqdm(enumerate(zip(dataset, source_output_cache, followup_input_cache)), total=total_length, desc=f"Running test for ({llm_name}, {task_name}, {relation_name})"):
-        if checkpoint and i < checkpoint["next_id"]: # start from checkpoint
-            continue
+    do_limit = run_config["data_start_index"] is not None and run_config["data_end_index"] is not None and run_config["data_start_index"] >= 0 and run_config["data_end_index"] >= 0
+    start_index = run_config["data_start_index"] if do_limit else 0
 
-        do_limit = run_config["data_start_index"] is not None and run_config["data_end_index"] is not None and run_config["data_start_index"] >= 0 and run_config["data_end_index"] >= 0
-        start_index = run_config["data_start_index"] if do_limit else 0
-        
-        data = process_single_input(
-            source_input, 
-            input_transformation, 
-            run_sut, 
-            output_relation, 
-            source_input_verification_cache[i], 
-            source_output_verification_cache[i], 
-            followup_input_verification_cache[i], 
-            source_output=source_output, 
-            followup_inputs=followup_input,
+    start_id = checkpoint["next_id"] if checkpoint else 0
+    num_threads = run_config.get("num_threads", 1)
+    # run_sut is left unwrapped -- it's always an LLM call (network-bound,
+    # thread-safe) and normally the dominant per-item cost, so it's the
+    # part that actually benefits from running in parallel across items.
+    safe_input_transformation = serialize_if_parallel(input_transformation, num_threads)
+    safe_output_relation = serialize_if_parallel(output_relation, num_threads)
+
+    def run_one(i):
+        return process_single_input(
+            dataset[i],
+            safe_input_transformation,
+            run_sut,
+            safe_output_relation,
+            source_input_verification_cache[i],
+            source_output_verification_cache[i],
+            followup_input_verification_cache[i],
+            source_output=source_output_cache[i],
+            followup_inputs=followup_input_cache[i],
             id=start_index + i
         )
+
+    remaining_indices = list(range(start_id, total_length))
+    results = parallel_map_ordered(run_one, remaining_indices, num_threads)
+
+    for offset, data in tqdm(enumerate(results), total=len(remaining_indices), desc=f"Running test for ({llm_name}, {task_name}, {relation_name})"):
+        i = start_id + offset
         data_list.append(data)
-        
+
         if checkpoint_interval and checkpoint_interval > 0 and i % checkpoint_interval == checkpoint_interval - 1:
             save_checkpoint(data_list, checkpoint_type="followup_outputs", next_id=i+1, llm_name=llm_name, task_name=task_name, relation_name=relation_name, run_config=run_config)
 

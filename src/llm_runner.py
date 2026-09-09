@@ -1,6 +1,7 @@
 from openai import OpenAI
 from requests.exceptions import Timeout
 from llm_handler import run_template_llm
+from llm_queue import HermesQueueClient
 from time import sleep
 import sys
 
@@ -80,8 +81,15 @@ def get_llm_function(model):
 
 
 # this function is used as a tool; this llm is not being tested
+#
+# Hermes (the transformation LLM) is no longer called directly in-process.
+# Requests are handed off to a Redis queue (see llm_queue.py) and picked up
+# by a separate worker process (src/llm_worker.py), which owns the actual
+# LLM call and does the inference. This lets transformation requests be
+# submitted asynchronously instead of blocking this process for each call.
+_hermes_queue_client = HermesQueueClient(model=llm_for_transformation)
+
 def run_template_gpt(inputs : list, prompt_template : str, examples : list=[], placeholder_template="{INPUT_#}") -> str | None:
     if not isinstance(inputs, list):
         inputs = [inputs]
-    llm_func = get_llm_function(llm_for_transformation)
-    return run_template_llm(llm_func, inputs, prompt_template, examples, placeholder_template)
+    return run_template_llm(_hermes_queue_client.run, inputs, prompt_template, examples, placeholder_template)
