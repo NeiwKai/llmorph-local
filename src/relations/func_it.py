@@ -158,6 +158,15 @@ class ITConcatRandomSentence(SingleInputTransformer):
         self.data = RANDOM_SENTENCES
         self.rand = random.Random(rand_seed)
 
+    def concat_random(self, input_val)
+    
+# original MR-84
+class ITConcatRandomSentence_og(SingleInputTransformer):
+    def __init__(self, transform_indices=[[0]], rand_seed=42):
+        super().__init__(transform_indices)
+        self.data = RANDOM_SENTENCES
+        self.rand = random.Random(rand_seed)
+
     def concat_random(self, input_val):
         random_datum = self.rand.choice(self.data)
         return input_val + " " + random_datum
