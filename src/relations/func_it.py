@@ -13,6 +13,7 @@ import re
 import spacy
 import os
 from openai import OpenAI
+from typing import Set, Dict, List
 
 nlp = spacy.load("en_core_web_trf")
 
@@ -326,9 +327,70 @@ class CharacterRandomBase(ObjectRandomBase):
 
         return self.join_tokens(new_text)
 
-
 # MR-1
 class ITReplaceCharacters(CharacterRandomBase):
+    # Logical operators, quantifiers, and negations that alter core semantics if mutated
+    PROTECTED_WORDS: Set[str] = {
+        "not", "no", "never", "none", "neither", "nor", 
+        "hardly", "scarcely", "barely", "all", "every"
+    }
+
+    def _get_protected_indices(self, raw_text: str) -> Set[int]:
+        doc = nlp(raw_text)
+        protected_indices: Set[int] = set()
+
+        # 1. Protect all named entities
+        for ent in doc.ents:
+            protected_indices.update(range(ent.start_char, ent.end_char))
+
+        # 2. Protect Proper Nouns, Negations, Numbers, Symbols, Punctuation, Whitespaces, and Acronyms
+        for token in doc:
+            is_proper_noun = token.pos_ == "PROPN" or token.tag_ in {"NNP", "NNPS"}
+            is_negation = token.lower_ in self.PROTECTED_WORDS or token.dep_ == "neg"
+            is_numeric = token.like_num or token.pos_ == "NUM"
+            is_symbol_or_punct = token.is_punct or token.pos_ in {"SYM", "X"}
+            is_acronym = token.text.isupper() and len(token.text) > 1
+            is_whitespace = token.is_space
+
+            if (is_proper_noun or is_negation or is_numeric or 
+                is_symbol_or_punct or is_acronym or is_whitespace):
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+
+        # 3. Protect full-term definitions preceding parenthesized acronyms
+        # Example pattern: "Multiple-choice question answering (MCQA)"
+        for i in range(len(doc) - 3):
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_indices.update(range(doc[curr].idx, doc[curr].idx + len(doc[curr].text)))
+                    curr -= 1
+
+        return protected_indices
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        raw_text = "".join(text)
+        protected_indices = self._get_protected_indices(raw_text)
+
+        valid_ids = [i for i in ids if i not in protected_indices]
+
+        for i in valid_ids:
+            original_char = text[i]
+
+            # Skip non-alphabetic characters
+            if not original_char.isalpha():
+                continue
+
+            # Generate a different letter, preserving original casing
+            new_char = chr(self.rand.randint(97, 122))
+            while new_char == original_char.lower():
+                new_char = chr(self.rand.randint(97, 122))
+
+            text[i] = new_char.upper() if original_char.isupper() else new_char
+
+        return text
+
+# original MR-1
+class ITReplaceCharacters_og(CharacterRandomBase):
     def object_transform(self, ids: list, text: list):
         for i in ids:
             text[i] = chr(self.rand.randint(97, 122))
@@ -336,6 +398,66 @@ class ITReplaceCharacters(CharacterRandomBase):
 
 # MR-2
 class ITDeleteCharacters(CharacterRandomBase):
+    # Logical operators, quantifiers, and negations that alter core semantics if mutated
+    PROTECTED_WORDS: Set[str] = {
+        "not", "no", "never", "none", "neither", "nor", 
+        "hardly", "scarcely", "barely", "all", "every"
+    }
+    # Minimum character length a token must have before allowing character deletion
+    MIN_TOKEN_LENGTH: int = 5
+
+    def _get_protected_indices(self, raw_text: str) -> Set[int]:
+        doc = nlp(raw_text)
+        protected_indices: Set[int] = set()
+
+        # 1. Protect all named entities
+        for ent in doc.ents:
+            protected_indices.update(range(ent.start_char, ent.end_char))
+
+        # 2. Protect functional tokens, short tokens, numbers, symbols, whitespace, and acronyms
+        for token in doc:
+            is_proper_noun = token.pos_ == "PROPN" or token.tag_ in {"NNP", "NNPS"}
+            is_negation = token.lower_ in self.PROTECTED_WORDS or token.dep_ == "neg"
+            is_numeric = token.like_num or token.pos_ == "NUM"
+            is_symbol_or_punct = token.is_punct or token.pos_ in {"SYM", "X"}
+            is_acronym = token.text.isupper() and len(token.text) > 1
+            is_whitespace = token.is_space
+            is_too_short = len(token.text) < self.MIN_TOKEN_LENGTH
+
+            if (is_proper_noun or is_negation or is_numeric or is_symbol_or_punct or 
+                is_acronym or is_whitespace or is_too_short):
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+
+        # 3. Protect full-term definitions preceding parenthesized acronyms
+        # Example pattern: "Multiple-choice question answering (MCQA)"
+        for i in range(len(doc) - 3):
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_indices.update(range(doc[curr].idx, doc[curr].idx + len(doc[curr].text)))
+                    curr -= 1
+
+        return protected_indices
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        raw_text = "".join(text)
+        protected_indices = self._get_protected_indices(raw_text)
+
+        # Filter indices generated by CharacterRandomBase against the protected set
+        valid_ids = [i for i in ids if i not in protected_indices]
+
+        for i in valid_ids:
+            # Explicit guard: never delete whitespace or control characters
+            if text[i].isspace():
+                continue
+
+            # Delete the character
+            text[i] = ""
+
+        return text
+
+# original MR-2
+class ITDeleteCharacters_og(CharacterRandomBase):
     def object_transform(self, ids: list, text: list):
         for i in ids:
             text[i] = ''
@@ -343,6 +465,44 @@ class ITDeleteCharacters(CharacterRandomBase):
 
 # MR-4
 class ITAddCharacters(CharacterRandomBase):
+    def _get_protected_indices(self, raw_text: str) -> Set[int]:
+        doc = nlp(raw_text)
+        protected_indices: Set[int] = set()
+
+        # 1. Protect all named entities
+        for ent in doc.ents:
+            protected_indices.update(range(ent.start_char, ent.end_char))
+
+        # 2. Protect numbers, symbols, punctuation, and uppercase acronyms
+        for token in doc:
+            if token.pos_ in {"NUM", "SYM", "X"} or token.is_punct:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+            elif token.text.isupper() and len(token.text) > 1:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+
+        # 3. Protect full-term definitions preceding parenthesized acronyms (e.g., "Multiple-choice question answering (MCQA)")
+        for i in range(len(doc) - 3):
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_indices.update(range(doc[curr].idx, doc[curr].idx + len(doc[curr].text)))
+                    curr -= 1
+
+        return protected_indices
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        raw_text = "".join(text)
+        protected_indices = self._get_protected_indices(raw_text)
+
+        for i in ids:
+            # Shield protected indices and never append a character to whitespace
+            if i not in protected_indices and not text[i].isspace():
+                text[i] = text[i] + chr(self.rand.randint(97, 122))
+
+        return text
+
+# original MR-4
+class ITAddCharacters_og(CharacterRandomBase):
     def object_transform(self, ids: list, text: list):
         for i in ids:
             text[i] = text[i] + chr(self.rand.randint(97, 122))
@@ -350,6 +510,69 @@ class ITAddCharacters(CharacterRandomBase):
 
 # MR-3
 class ITLeetFormat(CharacterRandomBase):
+    # Leet mapping table
+    LEET_DICT: Dict[str, str] = {
+        'a': '4', 'A': '4',
+        'e': '3', 'E': '3',
+        'i': '1', 'I': '1',
+        'o': '0', 'O': '0',
+        't': '7', 'T': '7'
+    }
+
+    def _get_protected_indices(self, raw_text: str) -> Set[int]:
+        doc = nlp(raw_text)
+        protected_indices: Set[int] = set()
+
+        # 1. Protect all named entities
+        for ent in doc.ents:
+            protected_indices.update(range(ent.start_char, ent.end_char))
+
+        # 2. Protect numbers, symbols, punctuation, and uppercase acronyms
+        for token in doc:
+            if token.pos_ in {"NUM", "SYM", "X"} or token.is_punct:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+            elif token.text.isupper() and len(token.text) > 1:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+
+        # 3. Protect full-term definitions preceding parenthesized acronyms (e.g., "Multiple-choice question answering (MCQA)")
+        for i in range(len(doc) - 3):
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_indices.update(range(doc[curr].idx, doc[curr].idx + len(doc[curr].text)))
+                    curr -= 1
+
+        # 4. Prevent digit collision across spaces (e.g., prevents "room 10" -> "r00m 10")
+        for i, char in enumerate(raw_text):
+            if char.isdigit():
+                # Look backwards past whitespace
+                k = i - 1
+                while k >= 0 and raw_text[k].isspace():
+                    k -= 1
+                if k >= 0:
+                    protected_indices.add(k)
+
+                # Look forwards past whitespace
+                k = i + 1
+                while k < len(raw_text) and raw_text[k].isspace():
+                    k += 1
+                if k < len(raw_text):
+                    protected_indices.add(k)
+
+        return protected_indices
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        raw_text = "".join(text)
+        protected_indices = self._get_protected_indices(raw_text)
+
+        for i in ids:
+            if i not in protected_indices:
+                text[i] = self.LEET_DICT.get(text[i], text[i])
+
+        return text
+
+# original MR-3
+class ITLeetFormat_og(CharacterRandomBase):
     def object_transform(self, ids: list, text: list):
         leet_dict = {'a': '4', 'e': '3', 'i': '1', 'o': '0', 't': '7'}
         for i in ids:
@@ -365,6 +588,56 @@ class ITAddSpaces(CharacterRandomBase):
 
 # MR-6
 class ITSwapCharacters(CharacterRandomBase):
+    def _get_protected_indices(self, raw_text: str) -> Set[int]:
+        doc = nlp(raw_text)
+        protected_indices: Set[int] = set()
+
+        # 1. Named Entities (PERSON, ORG, GPE, DATE, etc.)
+        for ent in doc.ents:
+            protected_indices.update(range(ent.start_char, ent.end_char))
+
+        # 2. Numbers, symbols, punctuation, and uppercase acronyms
+        for token in doc:
+            if token.pos_ in {"NUM", "SYM", "X"} or token.is_punct:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+            elif token.text.isupper() and len(token.text) > 1:
+                protected_indices.update(range(token.idx, token.idx + len(token.text)))
+
+        # 3. Full-term definitions preceding parenthesized acronyms (e.g., "Multiple-choice question answering (MCQA)")
+        for i in range(len(doc) - 3):
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_indices.update(range(doc[curr].idx, doc[curr].idx + len(doc[curr].text)))
+                    curr -= 1
+
+        return protected_indices
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        raw_text = "".join(text)
+        protected_indices = self._get_protected_indices(raw_text)
+
+        last_swapped_idx = -2
+
+        # Sort indices to process sequentially and avoid cascading reversals
+        for i in sorted(ids):
+            # Guard against swapping adjacent indices that were just modified
+            if i <= last_swapped_idx + 1:
+                continue
+
+            if i < len(text) - 1:
+                # Both positions must be unprotected and non-whitespace
+                both_unprotected = (i not in protected_indices) and ((i + 1) not in protected_indices)
+                both_non_space = (not text[i].isspace()) and (not text[i + 1].isspace())
+
+                if both_unprotected and both_non_space:
+                    text[i], text[i + 1] = text[i + 1], text[i]
+                    last_swapped_idx = i
+
+        return text
+
+#  original MR-6
+class ITSwapCharacters_og(CharacterRandomBase):
     def object_transform(self, ids: list, text: list):
         for i in ids:
             if i < len(text) - 1:
@@ -386,6 +659,91 @@ class ITRandomiseCharacterOrderInWord(WordRandomBase):
 
 # MR-7
 class ITRandomiseCharacterOrderInWordKeepingEnds(WordRandomBase):
+    # Lexical negation and quantification terms critical to premise truth values
+    PROTECTED_WORDS: Set[str] = {
+        "not", "no", "never", "none", "neither", "nor",
+        "hardly", "scarcely", "barely", "all", "every"
+    }
+
+    def _get_protected_token_indices(self, doc) -> Set[int]:
+        protected_ids: Set[int] = set()
+
+        # 1. Named Entities (PERSON, ORG, GPE, DATE, EVENT, etc.)
+        for ent in doc.ents:
+            protected_ids.update(range(ent.start, ent.end))
+
+        # 2. Token-level linguistic checks
+        for token in doc:
+            is_proper_noun = token.pos_ == "PROPN" or token.tag_ in {"NNP", "NNPS"}
+            is_acronym = token.text.isupper() and len(token.text) > 1
+            is_numeric = token.like_num or token.pos_ == "NUM"
+            is_symbol_or_punct = token.is_punct or token.pos_ in {"SYM", "X"}
+            is_negation = token.lower_ in self.PROTECTED_WORDS or token.dep_ == "neg"
+
+            if is_proper_noun or is_acronym or is_numeric or is_symbol_or_punct or is_negation:
+                protected_ids.add(token.i)
+
+        # 3. Backward scan for full terms paired with parenthesized acronyms
+        # Example pattern: "Multiple-choice question answering (MCQA)"
+        for i in range(len(doc) - 3):
+            # Detect pattern: [Term Token] + "(" + [ACRONYM] + ")"
+            if doc[i + 1].text == "(" and doc[i + 2].text.isupper() and doc[i + 3].text == ")":
+                curr = i
+                # Walk backward to shield all preceding noun phrases, adjectives, and hyphens
+                while curr >= 0 and (doc[curr].pos_ in {"NOUN", "PROPN", "ADJ"} or doc[curr].text == "-"):
+                    protected_ids.add(curr)
+                    curr -= 1
+
+        return protected_ids
+
+    def transform_function(self, text: str) -> str:
+        doc = nlp(text)
+        protected_ids = self._get_protected_token_indices(doc)
+
+        # Build candidate pool: length >= 4, strictly alphabetic, not in protected index set
+        candidate_indices = [
+            token.i for token in doc
+            if len(token.text) >= 4
+            and token.text.isalpha()
+            and token.i not in protected_ids
+        ]
+
+        # If no words satisfy eligibility criteria, return unchanged input
+        if not candidate_indices:
+            return text
+
+        # Calculate mutation quota constrained by candidate pool size
+        num_mutated = math.ceil(len(candidate_indices) * self.replace_perc)
+        selected_ids = self.rand.sample(candidate_indices, min(num_mutated, len(candidate_indices)))
+
+        # Retain exact token formatting and spacing via spaCy's text_with_ws
+        tokens = [token.text_with_ws for token in doc]
+        mutated_tokens = self.object_transform(selected_ids, tokens)
+
+        return "".join(mutated_tokens)
+
+    def object_transform(self, ids: List[int], text: List[str]) -> List[str]:
+        for i in ids:
+            full_token = text[i]
+
+            # Separate core alphabetic string from trailing whitespace
+            core_word = full_token.rstrip()
+            trailing_whitespace = full_token[len(core_word):]
+
+            if len(core_word) > 3:
+                # Retry up to 10 times to prevent no-op outcomes on duplicate internal characters
+                for _ in range(10):
+                    middle_chars = self.rand.sample(core_word[1:-1], len(core_word) - 2)
+                    new_word = core_word[0] + "".join(middle_chars) + core_word[-1]
+
+                    if new_word != core_word:
+                        text[i] = new_word + trailing_whitespace
+                        break
+
+        return text
+
+# original MR-7
+class ITRandomiseCharacterOrderInWordKeepingEnds_og(WordRandomBase):
     def transform_function(self, text):
         tokens = self.tokenise(text)
         ids_at_least_4 = [i for i, token in enumerate(tokens) if len(token) >= 4]
