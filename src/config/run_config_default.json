@@ -3,11 +3,7 @@
 
     "tasks": {},
     "llm_list": [
-<<<<<<< HEAD
       "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K"
-=======
-        "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K"
->>>>>>> 74e0505a3ebe6a353d3673d96ada748ecb3a60f7
     ],
 
     "data_start_index": -1,
@@ -22,7 +18,6 @@
     "llm_key_file": "security/token-key.jwt",
     "llm_wait_time": 10,
     "llm_max_retries": -1,
-<<<<<<< HEAD
     "llm_endpoint": "http://localhost:8088/v1",
     "llm_for_transformation": "gemma-3-4b-it-q4_k_m",
 
@@ -31,10 +26,6 @@
     "redis_db": 0,
     "hermes_queue_name": "llmorph:hermes:requests",
     "hermes_response_timeout": 300,
-=======
-    "llm_endpoint": "http://localhost:8089/v1",
-    "llm_for_transformation": "Nous-Hermes-2-Mixtral-8x7B-DPO-Q2_K",
->>>>>>> 74e0505a3ebe6a353d3673d96ada748ecb3a60f7
 
     "only_generate_followup_inputs": false,
     "only_generate_source": false,
