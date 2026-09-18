@@ -6,6 +6,17 @@ __pycache__/
 *.sh
 
 llm
+test_experiment
+
+# Personal
+*.bin
+*.gz
+LICENSE.md
+llama-swap*
+GoogleNews*
+results_from_server*
+*.bak*
+src/config/scitldr_keywords.json
 
 *.zip
 

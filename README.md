@@ -13,17 +13,39 @@ Video demo: https://youtu.be/sHmqdieCfw4
 
 ## Requirements
 
-**Python:** Python 3.10.5
+**Python:** Python 3.11.15
 
 **Dependencies:** Install using
 
 ```
 pip install -r requirements.txt
 ```
-and
+*** Install additional package
 ```
 nltk.download('punkt')
+
+python -m spacy download en_core_web_trf
+
+from nlpaug.util.file.download import DownloadUtil
+DownloadUtil.download_word2vec(dest_dir='.')
 ```
+
+python
+```
+import gensim.downloader as api
+import shutil
+
+# Downloads the vectors to Gensim's cache
+path = api.load('word2vec-google-news-300', return_path=True)
+
+# Moves/copies the file directly to your current project folder
+shutil.copy(path, "./GoogleNews-vectors-negative300.bin.gz")
+```
+then
+```
+gunzip GoogleNews-vectors-negative300.bin.gz
+```
+
 
 An OpenAI key is needed in `security/token-key.jwt`.
 

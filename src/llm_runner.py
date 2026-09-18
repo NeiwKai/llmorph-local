@@ -80,7 +80,7 @@ def get_llm_function(model):
 
 
 # this function is used as a tool; this llm is not being tested
-def run_template_gpt(inputs : list, prompt_template : str, examples : list=[], placeholder_template="{INPUT_#}"):
+def run_template_gpt(inputs : list, prompt_template : str, examples : list=[], placeholder_template="{INPUT_#}") -> str | None:
     if not isinstance(inputs, list):
         inputs = [inputs]
     llm_func = get_llm_function(llm_for_transformation)
