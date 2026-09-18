@@ -20,7 +20,8 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
 
 #VOCAB_FILE = Path("./src/config/scitldr_keywords.json")
-kw_model = KeyBERT("sentence-transformers/all-MiniLM-L6-v2")
+sent_model = SentenceTransformer("sentence-transformers/multi-qa-mpnet-base-dot-v1")
+kw_model = KeyBERT(sent_model)
 nlp = spacy.load("en_core_web_trf")
 
 """
@@ -164,7 +165,7 @@ class ITBase(FuncIT):
         transform_target = input if self.multi_input else input[n]
         return transformation(transform_target)
 
-    def transform_input(self, input: list, transformation) -> str:
+    def transform_input(self, input: list, transformation) -> list:
         unique_indices = set(index for sublist in self.transform_indices for index in sublist)
 
         # get transformed values for each of any specified index
@@ -667,7 +668,10 @@ class ITNlpaug(SingleInputTransformer):
         augmented_text = self.augmenter.augment(input_val)
         return augmented_text if isinstance(augmented_text, str) else augmented_text[0]
     
-    def input_transformation(self, input: list) -> str:
+    def input_transformation(self, input: list) -> list:
+        """
+        Transform given paragraph.
+        """
         return self.transform_input(input, self.nlp_transform)
 
 
@@ -675,10 +679,9 @@ class ITNlpaug(SingleInputTransformer):
 
 
 # KEYWORD-BASED MRS
-
-class GETKeywordBase(CleanText, GPTRunner, ITBase):
+class BERTKeywordBase(CleanText, GPTRunner, ITBase):
     """
-    A keyword selection system featuring KeyBERT
+    A keyword selection system featuring KeyBERT.
 
     :param tuple(int,int) keyphrase_ngram_range: the range of ngram that will be use in KeyBERT.
     """
@@ -687,7 +690,7 @@ class GETKeywordBase(CleanText, GPTRunner, ITBase):
         super().__init__(**kwargs) # consume only what it use
         self.keyphrase_ngram_range = keyphrase_ngram_range
 
-    def get_keywords(self, input) -> str:
+    def get_keywords(self, input: str) -> str:
         print("Using keyphrase_ngram_range:", self.keyphrase_ngram_range)
         keywords = kw_model.extract_keywords(
             input,
@@ -695,11 +698,29 @@ class GETKeywordBase(CleanText, GPTRunner, ITBase):
             stop_words="english"
         )
         keywords = [kw for kw, _ in keywords]
+        print("Return keywords", keywords)
+        return keywords
+
+    def bind_context_kw(self, context: list, keywords: list) -> list:
+        if isinstance(context, list):
+            context = 'n'.join(context)
+        print("\n", "From bind_context_kw", "\n", [context, keywords])
+        return [context, keywords]
+
+class NERKeywordBase(CleanText, GPTRunner, ITBase):
+    """
+    A keyword selection system featuring NER concept.
+    """
+    
+    def get_keywords(self, input: str) -> str:
+        doc = nlp(input)
+        keywords = [ent.text for ent in doc.ents]
+        print("Return keywords", keywords)
         return keywords
         
 
 """
-# Replaced by GETKeywordBase(...)
+# Replaced by BERTKeywordBase(...)
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -722,7 +743,7 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
 """
     
 
-class ReplaceKeyword(GETKeywordBase):#GPTKeywordBase):
+class ReplaceKeyword(BERTKeywordBase):#GPTKeywordBase):
     """
     Keyword replace engine
     """
@@ -863,8 +884,6 @@ class ITReplaceKeywordCategoryRE(ITReplaceKeywordCategory):
         return [output]
 
 # 8 - SYNONYM
-"""
-# Dont use, get replaced by ITNlpaug<synonym>
 class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
     def get_replace_examples(self):
         return [[[
@@ -892,7 +911,6 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
 
     def input_transformation(self, input: list):
         return self.transform_input(input, self.replace_synonym)
-"""
 
 
 
@@ -923,10 +941,10 @@ class ReplaceKeywordDifferenceRE(ReplaceKeyword):
 # 10 - ANTONYM
 class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
     """
-    # Dont use, get replaced by ITNlpaug<antonym>
+    Keyword-level antonym substitution.
     """
 
-    def get_replace_examples(self):
+    def get_replace_examples(self) -> list:
         return [[[
             "She walked to the store to buy an apple.", 
             "walked -> ran\nslowly -> quickly\nbuy -> sell\nstore -> home\nshe -> he"], 
@@ -935,20 +953,29 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
             "noisy -> silent\nmy -> your\nfull -> empty\nelectric -> petrol\ncleaning -> dirtying\nbroke -> fixed"], 
             "In 1993, I fixed your arm while dirtying your petrol car."],]
 
-    def get_antonym(self, input):
+    def get_antonym(self, input) -> str:
+        """
         # prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give an antonym for \"{INPUT_1}\". If the word has no antonym, simply output the word itself."
         prompt_template = "You are given a context and a word. Produce an antonym of the word. Make sure the antonym makes sense in the context. If the word has no antonym, simply output the word itself. \n<context>{INPUT_0}</context>\n<word>{INPUT_1}</word>"
         examples = [
             [["She walked to the store to buy an apple.", "buy"], "sell"],
             [["In 1993, I broke my arm while cleaning my electric car.", "electric"], "petrol"],
         ]
-        new_word = self.run_gpt(input, prompt_template, examples)
+        """
+
+        #new_word = self.run_gpt(input, prompt_template, examples)
+
+        nlpaug = ITNlpaug(augment_type="antonym") # init augmenter
+        new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
+        print("new_word:", new_word)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
     
     def replace_antonym(self, input):
         keywords = self.get_keywords(input)
-        antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        #antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        antonym_words = [self.get_antonym(keyword) for keyword in keywords]
+
         return self.replace_words(input, keywords, antonym_words)
 
     def input_transformation(self, input: list) -> str:
@@ -957,13 +984,13 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
 class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym):
     """
     Replace keyword with antonym for Question Answering task.
-
-    <Still not use ITNlpaug>
     """
 
     def input_transformation(self, input: list):
         keywords = self.get_keywords(input[1]) # keywords from question
-        antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
+        print("Extracted keywords (antonym qa sub):", keywords)
+        #antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
+        antonym_words = [self.get_antonym(keyword) for keyword in keywords]
         output_c = self.replace_words(input[0], keywords, antonym_words)
         output_q = self.replace_words(input[1], keywords, antonym_words)
         return [[output_c, input[1]], [input[0], output_q]] # either, not both
@@ -971,8 +998,6 @@ class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym):
 class ITReplaceKeywordAntonymRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordAntonym):
     """
     Replace keyword with antonym for Relation Extraction task.
-
-    <Still not use ITNlpaug>
     """
 
     def input_transformation(self, input: list):
@@ -1033,7 +1058,7 @@ class ITReplaceKeywordRandomRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordRando
 
 
 # 34 - REMOVE
-class ITRemoveKeyword(SingleInputTransformer, GETKeywordBase): #GPTKeywordBase):
+class ITRemoveKeyword(SingleInputTransformer, BERTKeywordBase): #GPTKeywordBase):
     '''
     Remove keyword.
     '''
