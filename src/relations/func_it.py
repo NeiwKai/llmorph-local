@@ -20,53 +20,51 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
 
 #VOCAB_FILE = Path("./src/config/scitldr_keywords.json")
-sent_model = SentenceTransformer("sentence-transformers/multi-qa-mpnet-base-dot-v1")
+sent_model = SentenceTransformer("sentence-transformers/multi-qa-mpnet-base-dot-v1") # Use specific version of SentenceTransformer
 kw_model = KeyBERT(sent_model)
 nlp = spacy.load("en_core_web_trf")
 
-"""
 # Not work as expected
-def build_vocab():
-    dataset_corpus = load_dataset("allenai/scitldr", "Abstract")
-    vocab = set()
+# def build_vocab():
+#     dataset_corpus = load_dataset("allenai/scitldr", "Abstract")
+#     vocab = set()
+#
+#     for sample in dataset_corpus["train"]:
+#         text = " ".join(sample["source"])
+#         keywords = kw_model.extract_keywords(
+#             text, 
+#             keyphrase_ngram_range=(1, 2),
+#             stop_words="english",
+#             top_n=20,
+#             use_mmr=True,
+#             diversity=0.7
+#         )
+#
+#         for kw, _ in keywords:
+#             vocab.add(kw.lower())
+#
+#     with VOCAB_FILE.open("w", encoding="utf-8") as f:
+#         json.dump(sorted(vocab), f, indent=2)
+#
+#     return sorted(vocab)
+#
+# def load_vocab():
+#     with VOCAB_FILE.open("r", encoding="utf-8") as f:
+#         return json.load(f)
+#
+# if not VOCAB_FILE.exists():
+#     print("Building keyword vocabulary...")
+#     vocab = build_vocab()
+# else:
+#     print("Existing vocabulary cached found...")
+#     vocab = load_vocab()
 
-    for sample in dataset_corpus["train"]:
-        text = " ".join(sample["source"])
-        keywords = kw_model.extract_keywords(
-            text, 
-            keyphrase_ngram_range=(1, 2),
-            stop_words="english",
-            top_n=20,
-            use_mmr=True,
-            diversity=0.7
-        )
-
-        for kw, _ in keywords:
-            vocab.add(kw.lower())
-
-    with VOCAB_FILE.open("w", encoding="utf-8") as f:
-        json.dump(sorted(vocab), f, indent=2)
-
-    return sorted(vocab)
-
-def load_vocab():
-    with VOCAB_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-if not VOCAB_FILE.exists():
-    print("Building keyword vocabulary...")
-    vocab = build_vocab()
-else:
-    print("Existing vocabulary cached found...")
-    vocab = load_vocab()
-
-"""
 
 RANDOM_SENTENCES = load_json("./resources/random_sentences.json")
 RANDOM_WORDS = load_json("./resources/random_words.json")
 
 
-
+# Custom function for nlpaug (ITNlpaug)
 def CustomAugTokenizer(text) -> str:
     return [t.text for t in nlp(text)]
 
@@ -83,7 +81,6 @@ def CustomAugReverseTokenizer(tokens) -> str:
             text += token
 
     return text
-
 
 class SmartAntonymAug(naw.AntonymAug):
     def skip_aug(self, token_idxes, tokens) -> list:
@@ -191,7 +188,7 @@ class SingleInputTransformer(ITBase):
     """
 
     def __init__(self, transform_indices=[[0]], **kwargs):
-        super().__init__(**kwargs)#transform_indices, False, **kwargs) # consume only what it use
+        super().__init__(**kwargs) # consume only what it use, for custom replace_perc
 
 # MR-49
 class ITNone(FuncIT):
@@ -355,7 +352,8 @@ class SingleInputRandomBase(SingleInputTransformer):
     :param float replace_perc: The ratio of transformation with original input. For example, 0.1 -> replace 10% of given input.
     """
 
-    def __init__(self, transform_indices=[[0]], rand_seed=42, replace_perc=0.1, **kwargs):
+    # add replace_perc here, because it was used with a class that not inherit from ObjectRandomBase
+    def __init__(self, transform_indices=[[0]], rand_seed=42, replace_perc=0.1, **kwargs): 
         super().__init__(transform_indices)
         self.rand = random.Random(rand_seed)
         self.replace_perc = replace_perc
@@ -375,6 +373,7 @@ class ITRandomiseSentenceOrder(SingleInputRandomBase):
         return self.transform_input(input, self.randomise_sentences)
 
 
+# base class for character, word and sentence transformations
 class ObjectRandomBase(SingleInputRandomBase):
     """
     Base class for character, word and sentence transformations. <CONFIGABLE>
@@ -719,8 +718,6 @@ class NERKeywordBase(CleanText, GPTRunner, ITBase):
         return keywords
         
 
-"""
-# Replaced by BERTKeywordBase(...)
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
@@ -740,16 +737,15 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
         if isinstance(context, list):
             context = '\n'.join(context)
         return [context, keywords]
-"""
     
 
-class ReplaceKeyword(BERTKeywordBase):#GPTKeywordBase):
+class ReplaceKeyword(BERTKeywordBase): # Inheritant option; GPTKeywordBase(default), BERTKeywordBase, NERKeywordBase
     """
     Keyword replace engine
     """
 
     def replace_words(self, text: str, words_from: list[str], words_to: list[str]) -> str:
-        return self.replace_words_manual(text, words_from, words_to)
+        return self.replace_words_manual(text, words_from, words_to) # Use manual instead!
         # return self.replace_words_gpt(text, words_from, words_to)
 
     def replace_words_manual(self, text: str, words_from: list[str], words_to: list[str]) -> str:
@@ -757,8 +753,6 @@ class ReplaceKeyword(BERTKeywordBase):#GPTKeywordBase):
             text = re.sub(r'\b' + word_from + r'\b', word_to, text, flags=re.IGNORECASE)
         return text
     
-    """
-    # Use manual instead!
     def replace_words_gpt(self, text: str, words_from: list[str], words_to: list[str]):
         prompt_template = "Look at this text:\n\"{INPUT_0}\"\nReplace words using the following rules:\n{INPUT_1}\nOnly replace any words that are there. Ignore any rules that are not used. Only output the modified text."
         examples = self.get_replace_examples()
@@ -767,8 +761,8 @@ class ReplaceKeyword(BERTKeywordBase):#GPTKeywordBase):
     
     def get_replace_examples(self):
         pass
-    """
 
+# Dictionary construction
 class SimilarityDictionary():
     """
     Dictionary of similar word <In progress>.
@@ -813,6 +807,7 @@ class SimilarityDictionary():
         # No suitable replacement found
         return keyword
 
+
 # 137 - CATEGORY
 class ITReplaceKeywordCategory(ReplaceKeyword):
     """
@@ -821,10 +816,7 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
     <Not work as expected>
     """
 
-    """
-    # Dont use.
-
-    def get_replace_examples(self) -> list:
+    def get_replace_examples(self):
         return [[[
             "Sarah is an American software engineer. She works for Microsoft.", 
             "software engineer -> farmer\nSarah -> John\nAmerican -> Swedish\napple -> pear\nMicrosoft -> Nvidea"], 
@@ -832,20 +824,31 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
             [["My brother will travel to Japan next month to study Japanese.", 
             "sweater -> shirt\nJapanese -> Irish\nmonth -> year\nEurope -> Asia\nbrother -> sister\nJapan -> Italy"], 
             "My sister will travel to Italy next year to study Irish."],]
-    """
 
-    def get_word_same_category(self, input) -> str:
-        """
-        # Dont use.
-
+    def get_word_same_category(self, input):
         prompt_template = "Give a word or phrase in the same category as \"{INPUT_0}\"."
         examples = [
             [["Sarah"], "John"],
             [["software engineer"], "farmer"],
         ]
         new_word = self.run_gpt(input, prompt_template, examples)
-        """
+        cleaned_new_word = self.clean_text(new_word)
+        return cleaned_new_word
 
+    def input_transformation(self, input: list):
+        combined_inputs = '\n\n'.join(input)
+        keywords_list = self.get_keywords(combined_inputs)
+        category_words = [self.get_word_same_category(keyword) for keyword in keywords_list]
+        outputs = [self.replace_words(input_val, keywords_list, category_words) for input_val in input]
+        return [outputs]
+
+class ITReplaceKeywordCategorySpacy(ReplaceKeyword):
+    """
+    Keyword replace with same category. For example, <I like train> -> <I like car>.
+
+    <Not work as expected>
+    """
+    def get_word_same_category(self, input) -> str:
         similarity = SimilarityDictionary(vocab)
         new_word = similarity.nearest(input)
         cleaned_new_word = self.clean_text(new_word)
@@ -858,7 +861,8 @@ class ITReplaceKeywordCategory(ReplaceKeyword):
         outputs = [self.replace_words(input_val, keywords_list, category_words) for input_val in input]
         return [outputs]
 
-class ITReplaceKeywordCategoryQA(ITReplaceKeywordCategory):
+
+class ITReplaceKeywordCategoryQA(ITReplaceKeywordCategory): # Option: ITReplaceKeywordCategory(default), ITReplaceKeywordCategorySpacy
     """
     Keyword replace with same category for Question Answering task.
     """
@@ -870,7 +874,7 @@ class ITReplaceKeywordCategoryQA(ITReplaceKeywordCategory):
         outputs = [self.replace_words(input_val, keywords_list, category_words) for input_val in input]
         return [outputs]
 
-class ITReplaceKeywordCategoryRE(ITReplaceKeywordCategory):
+class ITReplaceKeywordCategoryRE(ITReplaceKeywordCategory): # Option: ITReplaceKeywordCategory(default), ITReplaceKeywordCategorySpacy
     """
     Keyword replace with same category for Relation Extraction task.
     """
@@ -940,11 +944,7 @@ class ReplaceKeywordDifferenceRE(ReplaceKeyword):
 
 # 10 - ANTONYM
 class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
-    """
-    Keyword-level antonym substitution.
-    """
-
-    def get_replace_examples(self) -> list:
+    def get_replace_examples(self):
         return [[[
             "She walked to the store to buy an apple.", 
             "walked -> ran\nslowly -> quickly\nbuy -> sell\nstore -> home\nshe -> he"], 
@@ -953,27 +953,40 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
             "noisy -> silent\nmy -> your\nfull -> empty\nelectric -> petrol\ncleaning -> dirtying\nbroke -> fixed"], 
             "In 1993, I fixed your arm while dirtying your petrol car."],]
 
-    def get_antonym(self, input) -> str:
-        """
+    def get_antonym(self, input):
         # prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give an antonym for \"{INPUT_1}\". If the word has no antonym, simply output the word itself."
         prompt_template = "You are given a context and a word. Produce an antonym of the word. Make sure the antonym makes sense in the context. If the word has no antonym, simply output the word itself. \n<context>{INPUT_0}</context>\n<word>{INPUT_1}</word>"
         examples = [
             [["She walked to the store to buy an apple.", "buy"], "sell"],
             [["In 1993, I broke my arm while cleaning my electric car.", "electric"], "petrol"],
         ]
-        """
-
-        #new_word = self.run_gpt(input, prompt_template, examples)
-
-        nlpaug = ITNlpaug(augment_type="antonym") # init augmenter
-        new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
-        print("new_word:", new_word)
+        new_word = self.run_gpt(input, prompt_template, examples)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
     
     def replace_antonym(self, input):
         keywords = self.get_keywords(input)
-        #antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        return self.replace_words(input, keywords, antonym_words)
+
+    def input_transformation(self, input: list):
+        return self.transform_input(input, self.replace_antonym)
+
+class ITReplaceKeywordAntonymNlpaug(SingleInputTransformer, ReplaceKeyword):
+    """
+    Keyword-level antonym substitution.
+    """
+
+    def get_antonym(self, input) -> str:
+        nlpaug = ITNlpaug(augment_type="antonym") # init augmenter
+        new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
+        print("new_word:", new_word)
+        cleaned_new_word = self.clean_text(new_word)
+        return cleaned_new_word
+
+    
+    def replace_antonym(self, input):
+        keywords = self.get_keywords(input)
         antonym_words = [self.get_antonym(keyword) for keyword in keywords]
 
         return self.replace_words(input, keywords, antonym_words)
@@ -981,7 +994,7 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
     def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.replace_antonym)
 
-class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym):
+class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym): # Option: ITReplaceKeywordAntonym(default), ITReplaceKeywordAntonymNlpaug
     """
     Replace keyword with antonym for Question Answering task.
     """
@@ -995,7 +1008,7 @@ class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym):
         output_q = self.replace_words(input[1], keywords, antonym_words)
         return [[output_c, input[1]], [input[0], output_q]] # either, not both
 
-class ITReplaceKeywordAntonymRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordAntonym):
+class ITReplaceKeywordAntonymRE(ReplaceKeywordDifferenceRE, ITReplaceKeywordAntonym): # Option: ITReplaceKeywordAntonym(default), ITReplaceKeywordAntonymNlpaug
     """
     Replace keyword with antonym for Relation Extraction task.
     """
@@ -1014,8 +1027,6 @@ class ITReplaceKeywordRandom(SingleInputRandomBase, ReplaceKeyword):
     Replace keyword with random.
     """
 
-    """
-    # Dont use.
     def get_replace_examples(self):
         return [[[
             "He walked to the store to buy an apple.", 
@@ -1024,7 +1035,6 @@ class ITReplaceKeywordRandom(SingleInputRandomBase, ReplaceKeyword):
             [["Sarah is an American software engineer. She works for Microsoft.", 
             "software engineer -> carry\nSarah -> give\nAmerican -> light\nsandwich -> clear\nMicrosoft -> call"], 
             "Give is a light carry. She works for call."],]
-    """
 
     def get_random_words(self, n) -> list:
         return list(self.rand.sample(RANDOM_WORDS, n))
@@ -1044,7 +1054,7 @@ class ITReplaceKeywordRandomQA(ITReplaceKeywordRandom):
 
     def input_transformation(self, input: list):
         keywords = self.get_keywords(input[1]) # keywords from question
-        random_words = self.get_random_words(len(keywords))
+        random_words = self.get_random_words(len(keywords)) # Fix keyword in context and question not the same
         output_c = self.replace_words(input[0], keywords, random_words)
         output_q = self.replace_words(input[1], keywords, random_words)
         return [[output_c, input[1]], [input[0], output_q], [output_c, output_q]] # all combinations
@@ -1073,8 +1083,6 @@ class ITRemoveKeyword(SingleInputTransformer, BERTKeywordBase): #GPTKeywordBase)
             new_text = re.sub(r'\b' + keyword + r'\b', '', new_text, flags=re.IGNORECASE)
         return new_text
     
-    """
-    # Dont use.
     def get_gpt_prompt(self):
         prompt_template = "Look at this text:\n\"{INPUT_0}\"\nRemove the following words:\n{INPUT_1}\nOnly remove the words. Only output the modified text."
         examples = [
@@ -1086,7 +1094,6 @@ class ITRemoveKeyword(SingleInputTransformer, BERTKeywordBase): #GPTKeywordBase)
     def remove_keywords_gpt(self, input_val, keywords):
         prompt_template, examples = self.get_gpt_prompt()
         return self.run_gpt([input_val, '\n'.join(keywords)], prompt_template, examples)
-    """
 
     def get_and_remove_keywords(self, input) -> str:
         keywords = self.get_keywords(input)
@@ -1140,8 +1147,6 @@ class ITRemoveKeywordRESentence(ITRemoveKeywordRE, ITRemoveKeywordSentence):
 
 
 # 152 - NEGATE
-"""
-# Not working
 class ITNegateSpacy(SingleInputTransformer, ITBase):
     '''
     Negate transformation using Spacy.
@@ -1211,7 +1216,6 @@ class ITNegateSpacy(SingleInputTransformer, ITBase):
 
                 return "".join(tokens)
         return text
-"""
 
 class ITNegate(GPTRunner, SingleInputTransformer, ITBase):
     def get_prompt(self):
@@ -1245,7 +1249,7 @@ class ITNegateQA(ITNegate):
         negated_question = self.get_negated([input[1]])
         return [[negated_context, input[1]], [input[0], negated_question]]
 
-class ITNegateRE(ITNegate):#ITNegate):
+class ITNegateRE(ITNegate):
     """
     Negatation transform for Relation Extraction.
     <Use LLM>
