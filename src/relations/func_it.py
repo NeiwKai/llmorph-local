@@ -688,7 +688,7 @@ class BERTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keyword_base():
         return "bert"
 
-    def __init__(self, keyphrase_ngram_range=[1, 1], **kwargs):
+    def __init__(self, keyphrase_ngram_range=[1, 2], **kwargs):
         super().__init__(**kwargs) # consume only what it use
         self.keyphrase_ngram_range = keyphrase_ngram_range
 
@@ -794,13 +794,18 @@ class SimilarityDictionary:
             normalize_embeddings=True
         )
     
-    def nearest(self, keyword, min_score=0.75, max_score=0.95) -> str:
+    def nearest(self, keyword, min_score=0.60, max_score=0.80) -> str:
         emb = self.model.encode(
             keyword,
             normalize_embeddings=True
         )
 
         scores = cos_sim(emb, self.embeddings)[0]
+
+        print("Max Score in Matrix:", scores.max().item())
+        print("Min Score in Matrix:", scores.min().item())
+        print("Shape of Embeddings:", self.embeddings.shape)
+        print("Length of Vocab:", len(self.vocab))
         
         order = scores.argsort(descending=True)
 
@@ -808,10 +813,13 @@ class SimilarityDictionary:
             idx = idx.item()
 
             word = self.vocab[idx]
+            # print("OG Keyword:", keyword)
+            # print("Looking at word:", word)
             score = float(scores[idx])
+            # print("Score:", score)
 
             # Skip identical word
-            if word.lower() != keyword.lower():
+            if word.lower() == keyword.lower():
                 continue
 
             # Skip if similarity is too low or too high
@@ -823,24 +831,32 @@ class SimilarityDictionary:
         # No suitable replacement found
         return keyword
     
-    def farthest(self, keyword, min_score=0.01, max_score=0.50) -> str:
+    def farthest(self, keyword, min_score=0.30, max_score=0.59) -> str:
         emb = self.model.encode(
             keyword,
             normalize_embeddings=True
         )
 
         scores = cos_sim(emb, self.embeddings)[0]
+
+        print("Max Score in Matrix:", scores.max().item())
+        print("Min Score in Matrix:", scores.min().item())
+        print("Shape of Embeddings:", self.embeddings.shape)
+        print("Length of Vocab:", len(self.vocab))
         
-        order = scores.argsort(descending=True)
+        order = scores.argsort(descending=False)
 
         for idx in order:
             idx = idx.item()
 
             word = self.vocab[idx]
+            # print("OG Keyword:", keyword)
+            # print("Looking at word:", word)
             score = float(scores[idx])
+            # print("Score:", score)
 
             # Skip identical word
-            if word.lower() != keyword.lower():
+            if word.lower() == keyword.lower():
                 continue
 
             if not (min_score <= score <= max_score):

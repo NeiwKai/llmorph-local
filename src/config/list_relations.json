@@ -5,7 +5,7 @@
             "func_or": {"class": "relations.func_or.OREquivalence"}
         },
         "8": {
-            "func_it": {"class": "relations.func_it.ITReplaceKeywordSynonym", "args": ["gpt"]}, 
+            "func_it": {"class": "relations.func_it.ITReplaceKeywordSynonym", "args": ["spacy"]}, 
             "func_or": {"class": "relations.func_or.OREquivalence"}
         },
         "51": {
@@ -134,7 +134,7 @@
             "func_vso": {"class": "relations.func_verify.VerifySetDifference", "args": ["unknown"]}
         },
         "10": {
-            "func_it": {"class": "relations.func_it.ITReplaceKeywordAntonymQA", "args": ["gpt"]},
+            "func_it": {"class": "relations.func_it.ITReplaceKeywordAntonymQA", "args": ["spacy"]},
             "func_vso": {"class": "relations.func_verify.VerifySetDifference", "args": ["unknown"]}
         },
         "34": {
