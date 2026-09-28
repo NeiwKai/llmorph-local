@@ -2,6 +2,8 @@ from llm_runner import run_template_gpt
 from file_handler import load_json
 from .func_base import FuncIT
 import random
+from typing import Union, Optional
+import importlib
 import string
 import math
 from nltk.tokenize import sent_tokenize, word_tokenize
@@ -675,8 +677,6 @@ class ITNlpaug(SingleInputTransformer):
 
 
 
-
-
 # KEYWORD-BASED MRS
 class BERTKeywordBase(CleanText, GPTRunner, ITBase):
     """
@@ -684,6 +684,10 @@ class BERTKeywordBase(CleanText, GPTRunner, ITBase):
 
     :param tuple(int,int) keyphrase_ngram_range: the range of ngram that will be use in KeyBERT.
     """
+    
+    @staticmethod
+    def get_keyword_base():
+        return "bert"
 
     def __init__(self, keyphrase_ngram_range=[1, 2], **kwargs):
         super().__init__(**kwargs) # consume only what it use
@@ -710,15 +714,24 @@ class NERKeywordBase(CleanText, GPTRunner, ITBase):
     """
     A keyword selection system featuring NER concept.
     """
+
+    @staticmethod
+    def get_keyword_base():
+        return "ner"
     
     def get_keywords(self, input: str) -> str:
         doc = nlp(input)
         keywords = [ent.text for ent in doc.ents]
         print("Return keywords", keywords)
         return keywords
+    # Not finish
         
 
 class GPTKeywordBase(CleanText, GPTRunner, ITBase):
+    @staticmethod
+    def get_keyword_base():
+        return "gpt"
+
     def get_keywords_gpt(self, input):
         prompt_template = "Identify names, pronouns, country names, occupations, and similar keywords in the following text:\n\"{INPUT_0}\"\nOnly output the list of words, nothing else."
         examples = [
@@ -738,15 +751,17 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
             context = '\n'.join(context)
         return [context, keywords]
     
-
-class ReplaceKeyword(BERTKeywordBase): # Inheritant option; GPTKeywordBase(default), BERTKeywordBase, NERKeywordBase
+# Inheritant option; GPTKeywordBase(default), BERTKeywordBase, NERKeywordBase
+class ReplaceKeyword(BERTKeywordBase):
     """
     Keyword replace engine
     """
 
     def replace_words(self, text: str, words_from: list[str], words_to: list[str]) -> str:
-        return self.replace_words_manual(text, words_from, words_to) # Use manual instead!
-        # return self.replace_words_gpt(text, words_from, words_to)
+        if self.get_keyword_base == "gpt":
+            return self.replace_words_gpt(text, words_from, words_to)
+        else:
+            return self.replace_words_manual(text, words_from, words_to) # Use manual instead!
 
     def replace_words_manual(self, text: str, words_from: list[str], words_to: list[str]) -> str:
         for word_from, word_to in zip(words_from, words_to):
@@ -761,6 +776,7 @@ class ReplaceKeyword(BERTKeywordBase): # Inheritant option; GPTKeywordBase(defau
     
     def get_replace_examples(self):
         pass
+
 
 # Dictionary construction
 class SimilarityDictionary():
@@ -888,8 +904,13 @@ class ITReplaceKeywordCategoryRE(ITReplaceKeywordCategory): # Option: ITReplaceK
         return [output]
 
 # 8 - SYNONYM
+# Option: ITReplaceKeywordSynonym(default), ITReplaceKeywordSynonymNlpaug
 class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
-    def get_replace_examples(self):
+    """
+    Replace keyword with synonym.
+    """
+
+    def get_replace_examples(self) -> list:
         return [[[
             "Sam walked to the store to buy an apple.", 
             "walked -> travelled\nslowly -> unhurriedly\nbuy -> purchase\nstore -> shop"], 
@@ -898,7 +919,7 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
             "buy -> purachase\nclothes -> garments\nexpensive -> pricy\nwhy -> for what reason\nfull -> complete"], 
             "I wonder for what reason garments are so pricy."],]
 
-    def get_synonym(self, input):
+    def get_synonym(self, input) -> str:
         prompt_template = "Context:\n\"{INPUT_0}\"\nMaking sense in this context, give a synonym for \"{INPUT_1}\". If the word has no synonym, simply output the word itself."
         examples = [
             [["Sam walked to the store to buy an apple.", "walked"], "travelled"],
@@ -907,15 +928,55 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
         new_word = self.run_gpt(input, prompt_template, examples)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
+
+    def get_synonym_nlpaug(self, input) -> str:
+        nlpaug = ITNlpaug(augment_type="synonym") # init augmenter
+        new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
+        print("new_word:", new_word)
+        cleaned_new_word = self.clean_text(new_word)
+        return cleaned_new_word
     
     def replace_synonym(self, input):
-        keywords = self.get_keywords(input)
-        synonym_words = [self.get_synonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+        keywords = []
+        synonym_words = []
+        match self.get_keyword_base:
+            case "gpt":
+                print("Using gpt")
+                keywords = self.engine.get_keywords(input)
+                synonym_words = [self.get_synonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+                print("keywords:", keywords)
+                print("synonym_words", synonym_words)
+            case "nlpaug":
+                print("Using nlpaug")
+                keywords = self.engine.get_keywords(input)
+                synonym_words = [self.get_synonym_nlpaug(keyword) for keyword in keywords]
+                print("keywords:", keywords)
+                print("synonym_words", synonym_words)
+
+        print("keywords:", keywords)
+        print("synonym_words", synonym_words)
+
         return self.replace_words(input, keywords, synonym_words)
 
-    def input_transformation(self, input: list):
+    def input_transformation(self, input: list) -> list:
         return self.transform_input(input, self.replace_synonym)
 
+# class ITReplaceKeywordSynonymNlpaug(SingleInputTransformer, ReplaceKeyword):
+#     def get_synonym(self, input):
+#         nlpaug = ITNlpaug(augment_type="synonym") # init augmenter
+#         new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
+#         print("new_word:", new_word)
+#         cleaned_new_word = self.clean_text(new_word)
+#         return cleaned_new_word
+#
+#     def replace_synonym(self, input):
+#         keywords = self.get_keywords(input)
+#         synonym_words = [self.get_synonym(keyword) for keyword in keywords]
+#
+#         return self.replace_words(input, keywords, synonym_words)
+#
+#     def input_transformation(self, input: list):
+#         return self.transform_input(input, self.replace_synonym)
 
 
 class ReplaceKeywordDifferenceRE(ReplaceKeyword):
@@ -943,6 +1004,7 @@ class ReplaceKeywordDifferenceRE(ReplaceKeyword):
 
 
 # 10 - ANTONYM
+# Option: ITReplaceKeywordAntonym(default), ITReplaceKeywordAntonymNlpaug
 class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
     def get_replace_examples(self):
         return [[[
@@ -994,7 +1056,9 @@ class ITReplaceKeywordAntonymNlpaug(SingleInputTransformer, ReplaceKeyword):
     def input_transformation(self, input: list) -> str:
         return self.transform_input(input, self.replace_antonym)
 
-class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym): # Option: ITReplaceKeywordAntonym(default), ITReplaceKeywordAntonymNlpaug
+# For QA task with MR 10
+# Option: ITReplaceKeywordAntonymQA(default), ITReplaceKeywordAntonymNlpaugQA
+class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym): 
     """
     Replace keyword with antonym for Question Answering task.
     """
@@ -1002,7 +1066,19 @@ class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym): # Option: ITReplaceKey
     def input_transformation(self, input: list):
         keywords = self.get_keywords(input[1]) # keywords from question
         print("Extracted keywords (antonym qa sub):", keywords)
-        #antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
+        antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
+        output_c = self.replace_words(input[0], keywords, antonym_words)
+        output_q = self.replace_words(input[1], keywords, antonym_words)
+        return [[output_c, input[1]], [input[0], output_q]] # either, not both
+
+class ITReplaceKeywordAntonymNlpaugQA(ITReplaceKeywordAntonymNlpaug): 
+    """
+    Replace keyword with antonym for Question Answering task.
+    """
+
+    def input_transformation(self, input: list):
+        keywords = self.get_keywords(input[1]) # keywords from question
+        print("Extracted keywords (antonym qa sub):", keywords)
         antonym_words = [self.get_antonym(keyword) for keyword in keywords]
         output_c = self.replace_words(input[0], keywords, antonym_words)
         output_q = self.replace_words(input[1], keywords, antonym_words)
