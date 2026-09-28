@@ -21,45 +21,44 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
 
-#VOCAB_FILE = Path("./src/config/scitldr_keywords.json")
+VOCAB_FILE = Path("./src/config/scitldr_keywords.json")
 sent_model = SentenceTransformer("sentence-transformers/multi-qa-mpnet-base-dot-v1") # Use specific version of SentenceTransformer
 kw_model = KeyBERT(sent_model)
 nlp = spacy.load("en_core_web_trf")
 
-# Not work as expected
-# def build_vocab():
-#     dataset_corpus = load_dataset("allenai/scitldr", "Abstract")
-#     vocab = set()
-#
-#     for sample in dataset_corpus["train"]:
-#         text = " ".join(sample["source"])
-#         keywords = kw_model.extract_keywords(
-#             text, 
-#             keyphrase_ngram_range=(1, 2),
-#             stop_words="english",
-#             top_n=20,
-#             use_mmr=True,
-#             diversity=0.7
-#         )
-#
-#         for kw, _ in keywords:
-#             vocab.add(kw.lower())
-#
-#     with VOCAB_FILE.open("w", encoding="utf-8") as f:
-#         json.dump(sorted(vocab), f, indent=2)
-#
-#     return sorted(vocab)
-#
-# def load_vocab():
-#     with VOCAB_FILE.open("r", encoding="utf-8") as f:
-#         return json.load(f)
-#
-# if not VOCAB_FILE.exists():
-#     print("Building keyword vocabulary...")
-#     vocab = build_vocab()
-# else:
-#     print("Existing vocabulary cached found...")
-#     vocab = load_vocab()
+def build_vocab():
+    dataset_corpus = load_dataset("allenai/scitldr", "Abstract")
+    vocab = set()
+
+    for sample in dataset_corpus["train"]:
+        text = " ".join(sample["source"])
+        keywords = kw_model.extract_keywords(
+            text, 
+            keyphrase_ngram_range=(1, 2),
+            stop_words="english",
+            top_n=20,
+            use_mmr=True,
+            diversity=0.7
+        )
+
+        for kw, _ in keywords:
+            vocab.add(kw.lower())
+
+    with VOCAB_FILE.open("w", encoding="utf-8") as f:
+        json.dump(sorted(vocab), f, indent=2)
+
+    return sorted(vocab)
+
+def load_vocab():
+    with VOCAB_FILE.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+if not VOCAB_FILE.exists():
+    print("Building keyword vocabulary...")
+    vocab = build_vocab()
+else:
+    print("Existing vocabulary cached found...")
+    vocab = load_vocab()
 
 
 RANDOM_SENTENCES = load_json("./resources/random_sentences.json")
@@ -689,7 +688,7 @@ class BERTKeywordBase(CleanText, GPTRunner, ITBase):
     def get_keyword_base():
         return "bert"
 
-    def __init__(self, keyphrase_ngram_range=[1, 2], **kwargs):
+    def __init__(self, keyphrase_ngram_range=[1, 1], **kwargs):
         super().__init__(**kwargs) # consume only what it use
         self.keyphrase_ngram_range = keyphrase_ngram_range
 
@@ -744,6 +743,7 @@ class GPTKeywordBase(CleanText, GPTRunner, ITBase):
         keywords = self.get_keywords_gpt(input)
         keywords_list = re.split(r'[,\n]+\s*', keywords)
         keywords_list_cleaned = [self.clean_text(keyword) for keyword in keywords_list]
+        print("Return keywords", keywords_list_cleaned)
         return keywords_list_cleaned
     
     def bind_context_kw(self, context, keywords):
@@ -779,7 +779,7 @@ class ReplaceKeyword(BERTKeywordBase):
 
 
 # Dictionary construction
-class SimilarityDictionary():
+class SimilarityDictionary:
     """
     Dictionary of similar word <In progress>.
 
@@ -815,6 +815,34 @@ class SimilarityDictionary():
                 continue
 
             # Skip if similarity is too low or too high
+            if not (min_score <= score <= max_score):
+                continue
+
+            return word
+
+        # No suitable replacement found
+        return keyword
+    
+    def farthest(self, keyword, min_score=0.01, max_score=0.50) -> str:
+        emb = self.model.encode(
+            keyword,
+            normalize_embeddings=True
+        )
+
+        scores = cos_sim(emb, self.embeddings)[0]
+        
+        order = scores.argsort(descending=True)
+
+        for idx in order:
+            idx = idx.item()
+
+            word = self.vocab[idx]
+            score = float(scores[idx])
+
+            # Skip identical word
+            if word.lower() != keyword.lower():
+                continue
+
             if not (min_score <= score <= max_score):
                 continue
 
@@ -910,6 +938,11 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
     Replace keyword with synonym.
     """
 
+    def __init__(self, core="gpt", *args, **kwargs):
+        kwargs.pop("transform_indices", None)
+        super().__init__(*args, **kwargs)
+        self.core = core
+
     def get_replace_examples(self) -> list:
         return [[[
             "Sam walked to the store to buy an apple.", 
@@ -936,22 +969,29 @@ class ITReplaceKeywordSynonym(SingleInputTransformer, ReplaceKeyword):
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
     
+    def get_synonym_spacy(self, input) -> str:
+        similarity = SimilarityDictionary(vocab)
+        new_word = similarity.nearest(input)
+        cleaned_new_word = self.clean_text(new_word)
+        return cleaned_new_word
+    
     def replace_synonym(self, input):
         keywords = []
         synonym_words = []
-        match self.get_keyword_base:
+        match self.core:
             case "gpt":
                 print("Using gpt")
-                keywords = self.engine.get_keywords(input)
+                keywords = self.get_keywords(input)
                 synonym_words = [self.get_synonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
-                print("keywords:", keywords)
-                print("synonym_words", synonym_words)
             case "nlpaug":
                 print("Using nlpaug")
-                keywords = self.engine.get_keywords(input)
+                keywords = self.get_keywords(input)
                 synonym_words = [self.get_synonym_nlpaug(keyword) for keyword in keywords]
-                print("keywords:", keywords)
-                print("synonym_words", synonym_words)
+            case "spacy":
+                print("Using spacy")
+                keywords = self.get_keywords(input)
+                synonym_words = [self.get_synonym_spacy(keyword) for keyword in keywords]
+
 
         print("keywords:", keywords)
         print("synonym_words", synonym_words)
@@ -1006,6 +1046,12 @@ class ReplaceKeywordDifferenceRE(ReplaceKeyword):
 # 10 - ANTONYM
 # Option: ITReplaceKeywordAntonym(default), ITReplaceKeywordAntonymNlpaug
 class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
+
+    def __init__(self, core="gpt", *args, **kwargs):
+        kwargs.pop("transform_indices", None)
+        super().__init__(*args, **kwargs)
+        self.core = core
+
     def get_replace_examples(self):
         return [[[
             "She walked to the store to buy an apple.", 
@@ -1025,36 +1071,45 @@ class ITReplaceKeywordAntonym(SingleInputTransformer, ReplaceKeyword):
         new_word = self.run_gpt(input, prompt_template, examples)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
-    
-    def replace_antonym(self, input):
-        keywords = self.get_keywords(input)
-        antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
-        return self.replace_words(input, keywords, antonym_words)
 
-    def input_transformation(self, input: list):
-        return self.transform_input(input, self.replace_antonym)
-
-class ITReplaceKeywordAntonymNlpaug(SingleInputTransformer, ReplaceKeyword):
-    """
-    Keyword-level antonym substitution.
-    """
-
-    def get_antonym(self, input) -> str:
+    def get_antonym_nlpaug(self, input) -> str:
         nlpaug = ITNlpaug(augment_type="antonym") # init augmenter
         new_word = nlpaug.nlp_transform(input) # use ITNlpaug Antonmy feature.
         print("new_word:", new_word)
         cleaned_new_word = self.clean_text(new_word)
         return cleaned_new_word
 
+    def get_antonym_spacy(self, input) -> str:
+        similarity = SimilarityDictionary(vocab)
+        new_word = similarity.farthest(input)
+        cleaned_new_word = self.clean_text(new_word)
+        return cleaned_new_word
     
     def replace_antonym(self, input):
-        keywords = self.get_keywords(input)
-        antonym_words = [self.get_antonym(keyword) for keyword in keywords]
+        keywords = []
+        antonym_words = []
+        match self.core:
+            case "gpt":
+                print("Using gpt")
+                keywords = self.get_keywords(input)
+                antonym_words = [self.get_antonym(self.bind_context_kw(input, keyword)) for keyword in keywords]
+            case "nlpaug":
+                print("Using nlpaug")
+                keywords = self.get_keywords(input)
+                antonmy_words = [self.get_antonym_nlpaug(keywords) for keyword in keywords]
+            case "spacy":
+                print("Using spacy")
+                keywords = self.get_keywords(input)
+                antonym_words = [self.get_antonym_spacy(keyword) for keyword in keywords]
+
+        print("keywords:", keywords)
+        print("antonym_words:", antonym_words)
 
         return self.replace_words(input, keywords, antonym_words)
 
-    def input_transformation(self, input: list) -> str:
+    def input_transformation(self, input: list):
         return self.transform_input(input, self.replace_antonym)
+
 
 # For QA task with MR 10
 # Option: ITReplaceKeywordAntonymQA(default), ITReplaceKeywordAntonymNlpaugQA
@@ -1063,23 +1118,31 @@ class ITReplaceKeywordAntonymQA(ITReplaceKeywordAntonym):
     Replace keyword with antonym for Question Answering task.
     """
 
-    def input_transformation(self, input: list):
-        keywords = self.get_keywords(input[1]) # keywords from question
-        print("Extracted keywords (antonym qa sub):", keywords)
-        antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
-        output_c = self.replace_words(input[0], keywords, antonym_words)
-        output_q = self.replace_words(input[1], keywords, antonym_words)
-        return [[output_c, input[1]], [input[0], output_q]] # either, not both
-
-class ITReplaceKeywordAntonymNlpaugQA(ITReplaceKeywordAntonymNlpaug): 
-    """
-    Replace keyword with antonym for Question Answering task.
-    """
+    def __init__(self, core="gpt", *args, **kwargs):
+        kwargs.pop("transform_indices", None)
+        super().__init__(core)
+        # core: str = "gpt", "nlpaug", "spacy"
 
     def input_transformation(self, input: list):
-        keywords = self.get_keywords(input[1]) # keywords from question
-        print("Extracted keywords (antonym qa sub):", keywords)
-        antonym_words = [self.get_antonym(keyword) for keyword in keywords]
+        keywords = []
+        antonym_words = []
+        match self.core:
+            case "gpt":
+                print("Using gpt")
+                keywords = self.get_keywords(input[1]) # keywords from question
+                antonym_words = [self.get_antonym(self.bind_context_kw(input[1], keyword)) for keyword in keywords]
+            case "nlpaug":
+                print("Using nlpaug")
+                keywords = self.get_keywords(input[1])
+                antonmy_words = [self.get_antonym_nlpaug(keywords) for keyword in keywords]
+            case "spacy":
+                print("Using spacy")
+                keywords = self.get_keywords(input[1])
+                antonym_words = [self.get_antonym_spacy(keyword) for keyword in keywords]
+
+        print("keywords:", keywords)
+        print("antonym_words", antonym_words)
+
         output_c = self.replace_words(input[0], keywords, antonym_words)
         output_q = self.replace_words(input[1], keywords, antonym_words)
         return [[output_c, input[1]], [input[0], output_q]] # either, not both
